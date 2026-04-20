@@ -64,7 +64,7 @@ func main() {
 
 	// Protected routes — require a valid JWT cookie
 	r.Group(func(r chi.Router) {
-		r.Use(appMiddleware.Auth(jwtSvc))
+		r.Use(appMiddleware.AuthWithRefresh(cfg, jwtSvc, userRepo, refreshRepo))
 		handlers.RegisterAchievementRoutes(r, achievementRepo)
 		handlers.RegisterUserRoutes(r, userRepo)
 		handlers.RegisterGitHubRoutes(r, userRepo)
