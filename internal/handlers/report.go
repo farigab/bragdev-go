@@ -65,6 +65,10 @@ func RegisterReportRoutes(r chi.Router, reportSvc *usecase.ReportService) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"report": out})
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"aiGeneratedReport": out,
+			"generatedAt":       time.Now().UTC().Format(time.RFC3339),
+			"reportType":        body.ReportType,
+		})
 	})
 }
