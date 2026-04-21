@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/farigab/bragdoc/internal/config"
+	"github.com/farigab/bragdev-go/internal/config"
 )
 
 // CORSMiddleware returns a middleware that sets CORS headers based on config.

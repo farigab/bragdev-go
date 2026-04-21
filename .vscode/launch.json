@@ -2,11 +2,11 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Launch Bragdoc",
+            "name": "Launch BragDev",
             "type": "go",
             "request": "launch",
             "mode": "auto",
-            "program": "${workspaceFolder}/cmd/bragdoc",
+            "program": "${workspaceFolder}/cmd/bragDev",
             "cwd": "${workspaceFolder}",
             "envFile": "${workspaceFolder}/.env"
         }

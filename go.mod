@@ -1,4 +1,4 @@
-module github.com/farigab/bragdoc
+module github.com/farigab/bragdev-go
 
 go 1.21
 

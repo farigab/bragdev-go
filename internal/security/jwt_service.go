@@ -8,7 +8,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/farigab/bragdoc/internal/logger"
+	"github.com/farigab/bragdev-go/internal/logger"
 )
 
 // TokenService defines the JWT operations required by the application.

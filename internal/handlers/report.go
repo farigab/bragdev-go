@@ -8,11 +8,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/farigab/bragdoc/internal/httpresp"
-	"github.com/farigab/bragdoc/internal/logger"
-	"github.com/farigab/bragdoc/internal/middleware"
-	"github.com/farigab/bragdoc/internal/usecase"
-	"github.com/farigab/bragdoc/internal/validation"
+	"github.com/farigab/bragdev-go/internal/httpresp"
+	"github.com/farigab/bragdev-go/internal/logger"
+	"github.com/farigab/bragdev-go/internal/middleware"
+	"github.com/farigab/bragdev-go/internal/usecase"
+	"github.com/farigab/bragdev-go/internal/validation"
 )
 
 // RegisterReportRoutes registers report endpoints.

@@ -13,7 +13,7 @@ import (
 
 const (
 	acceptHeader          = "application/vnd.github+json"
-	userAgent             = "bragdoc-app"
+	userAgent             = "bragdev-app"
 	authPrefix            = "token "
 	formatCommitsStatus   = "github commits status=%d: %s"
 	formatListReposStatus = "github list repos status=%d: %s"

@@ -9,10 +9,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/farigab/bragdoc/internal/integration"
-	"github.com/farigab/bragdoc/internal/logger"
-	"github.com/farigab/bragdoc/internal/middleware"
-	"github.com/farigab/bragdoc/internal/repository"
+	"github.com/farigab/bragdev-go/internal/integration"
+	"github.com/farigab/bragdev-go/internal/logger"
+	"github.com/farigab/bragdev-go/internal/middleware"
+	"github.com/farigab/bragdev-go/internal/repository"
 )
 
 // RegisterGitHubRoutes registers GitHub-related endpoints.

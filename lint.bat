@@ -1,5 +1,5 @@
 @echo off
-REM lint.bat - runs golangci-lint on the BragDoc codebase (Windows)
+REM lint.bat - runs golangci-lint on the BragDev codebase (Windows)
 REM Usage: run from repository root: lint.bat
 
 where golangci-lint >nul 2>&1

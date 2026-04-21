@@ -42,14 +42,14 @@
 
 ```bash
 git clone https://github.com/farigab/bragdev-go.git
-cd bragdoc
+cd bragdev
 ```
 
 1. Create a `.env` file or export environment variables. Example `.env`:
 
 ```env
 # Database
-DB_URL=postgres://user:password@localhost:5432/bragdoc?sslmode=disable
+DB_URL=postgres://user:password@localhost:5432/bragdev?sslmode=disable
 
 # App
 JWT_SECRET=replace-with-a-secure-random-string
@@ -81,11 +81,11 @@ MIGRATE=true
 
 ```bash
 # run directly with Go (reads .env via godotenv)
-go run ./cmd/bragdoc
+go run ./cmd/bragdev
 
 # or build and run (recommended for production-like runs)
-go build -o bin/bragdoc ./cmd/bragdoc
-MIGRATE=true DB_URL="$DB_URL" JWT_SECRET="$JWT_SECRET" ./bin/bragdoc
+go build -o bin/bragdev ./cmd/bragdev
+MIGRATE=true DB_URL="$DB_URL" JWT_SECRET="$JWT_SECRET" ./bin/bragdev
 ```
 
 The server listens on the port specified by `PORT` (defaults to `8080`). On
@@ -176,15 +176,15 @@ The report endpoint returns a JSON object containing `aiGeneratedReport`,
 Build the image and run with environment variables:
 
 ```bash
-docker build -t bragdoc .
+docker build -t bragdev .
 
 docker run -p 8080:8080 \
-  -e DB_URL="postgres://user:pass@db:5432/bragdoc?sslmode=disable" \
+  -e DB_URL="postgres://user:pass@db:5432/bragdev?sslmode=disable" \
   -e JWT_SECRET="your_jwt_secret" \
   -e GITHUB_OAUTH_CLIENT_ID="id" \
   -e GITHUB_OAUTH_CLIENT_SECRET="secret" \
   -e GEMINI_API_KEY="key" \
-  bragdoc
+  bragdev
 ```
 
 The provided `Dockerfile` builds a static Linux binary and copies SQL
@@ -201,7 +201,7 @@ The initial migration creates the `users` and `refresh_tokens` tables.
 
 ## Project Structure
 
-- `cmd/bragdoc` — application entrypoint
+- `cmd/bragdev` — application entrypoint
 - `internal/config` — env configuration loader
 - `internal/handlers` — HTTP handlers and routing
 - `internal/integration` — external integrations (GitHub, Gemini, etc.)

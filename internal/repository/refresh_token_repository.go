@@ -4,7 +4,7 @@ package repository
 import (
 	"github.com/jmoiron/sqlx"
 
-	"github.com/farigab/bragdoc/internal/domain"
+	"github.com/farigab/bragdev-go/internal/domain"
 )
 
 // RefreshTokenRepository defines operations for refresh tokens.

@@ -1,5 +1,5 @@
 @echo off
-REM run.bat - runs the BragDoc server (Windows)
+REM run.bat - runs the BragDev server (Windows)
 REM Usage: run from repository root: run.bat
 
 where go >nul 2>&1
@@ -9,8 +9,8 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-if not exist "cmd\bragdoc" (
-    echo [ERRO] Diretorio cmd\bragdoc nao encontrado.
+if not exist "cmd\bragdev" (
+    echo [ERRO] Diretorio cmd\bragdev nao encontrado.
     echo Execute este script a partir da raiz do repositorio.
     exit /b 1
 )
@@ -22,8 +22,8 @@ if exist .env (
     echo [AVISO] Arquivo .env nao encontrado. Usando variaveis do sistema.
 )
 
-echo Iniciando servidor BragDoc...
-go run ./cmd/bragdoc %*
+echo Iniciando servidor BragDev...
+go run ./cmd/bragdev %*
 
 if %ERRORLEVEL% neq 0 (
     echo.

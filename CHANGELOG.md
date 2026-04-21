@@ -21,7 +21,7 @@ Generated: 2026-04-20
 ### Changed (Unreleased)
 
 - Replaced usages of the standard `log` package with the new `internal/logger` across the codebase.
-- `cmd/bragdoc/main.go`: initialize logger early, use logger for startup/errors, register `RequestLogger` middleware, and improve shutdown handling.
+- `cmd/bragdev/main.go`: initialize logger early, use logger for startup/errors, register `RequestLogger` middleware, and improve shutdown handling.
 - `internal/integration/gemini.go`: rename fields to `apiURL`/`apiKey`, expose `NewGeminiClient(apiKey, apiURL, model)`, and use `closeBody` for safer response handling.
 - `internal/handlers`: improved error handling and replaced plain-text responses with `httpresp.JSONError` in several endpoints; GitHub import handlers reorganized and split for clarity.
 - `internal/security/jwt_service.go`: added convenience methods, safer startup behavior when `JWT_SECRET` is missing, and helper `ExtractUserLoginSafe`.

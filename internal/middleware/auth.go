@@ -9,10 +9,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/farigab/bragdoc/internal/config"
-	"github.com/farigab/bragdoc/internal/domain"
-	"github.com/farigab/bragdoc/internal/repository"
-	"github.com/farigab/bragdoc/internal/security"
+	"github.com/farigab/bragdev-go/internal/config"
+	"github.com/farigab/bragdev-go/internal/domain"
+	"github.com/farigab/bragdev-go/internal/repository"
+	"github.com/farigab/bragdev-go/internal/security"
 )
 
 type contextKey string

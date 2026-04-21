@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/farigab/bragdoc/internal/integration"
-	"github.com/farigab/bragdoc/internal/report"
-	"github.com/farigab/bragdoc/internal/repository"
+	"github.com/farigab/bragdev-go/internal/integration"
+	"github.com/farigab/bragdev-go/internal/report"
+	"github.com/farigab/bragdev-go/internal/repository"
 )
 
 // GenerateReportInput holds the parameters for report generation.

@@ -1,4 +1,4 @@
-// Package main is the server entrypoint for the bragdoc application.
+// Package main is the server entrypoint for the bragdev application.
 package main
 
 import (
@@ -14,14 +14,14 @@ import (
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 
-	"github.com/farigab/bragdoc/internal/config"
-	"github.com/farigab/bragdoc/internal/handlers"
-	"github.com/farigab/bragdoc/internal/integration"
-	"github.com/farigab/bragdoc/internal/logger"
-	appMiddleware "github.com/farigab/bragdoc/internal/middleware"
-	"github.com/farigab/bragdoc/internal/repository"
-	"github.com/farigab/bragdoc/internal/security"
-	"github.com/farigab/bragdoc/internal/usecase"
+	"github.com/farigab/bragdev-go/internal/config"
+	"github.com/farigab/bragdev-go/internal/handlers"
+	"github.com/farigab/bragdev-go/internal/integration"
+	"github.com/farigab/bragdev-go/internal/logger"
+	appMiddleware "github.com/farigab/bragdev-go/internal/middleware"
+	"github.com/farigab/bragdev-go/internal/repository"
+	"github.com/farigab/bragdev-go/internal/security"
+	"github.com/farigab/bragdev-go/internal/usecase"
 )
 
 func main() {
