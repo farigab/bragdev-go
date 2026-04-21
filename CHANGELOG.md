@@ -1,32 +1,26 @@
 # Changelog
 
-All notable changes for this project.
+All notable changes to this project are documented in this file.
+
+This project follows the "Keep a Changelog" format and Semantic Versioning.
 
 Generated: 2026-04-20
 
-## Unreleased
+## [Unreleased]
 
-This changelog was generated from the repository commit history.
-
-Total commits included: 5
+Summary of changes since the last release.
 
 ### Added
+- GitHub integration — Added GitHub OAuth flow and commit-fetching integration. (Commit: 097573c, 2026-04-20; Author: Gabriel Farias)
+- Report response enhancements — Include `generated_at` timestamp and `report_type` fields in report responses for improved traceability. (Commit: 94f8eae, 2026-04-20; Author: Gabriel Farias)
+- JWT refresh rotation — Implement refresh-token rotation in the authentication middleware to improve security. (Commit: 860f80d, 2026-04-20; Author: Gabriel Farias)
 
-- Implement GitHub integration for commit fetching and OAuth (097573c) — 2026-04-20 — Gabriel Farias
-- Enhance report response structure with generation timestamp and report type (94f8eae) — 2026-04-20 — Gabriel Farias
-- Implement JWT refresh token rotation in authentication middleware (860f80d) — 2026-04-20 — Gabriel Farias
-
-### Changed / Refactor
-
-- Remove achievement domain and repository (70dd7fb) — 2026-04-20 — Gabriel Farias
-- Remove achievements table and related index from initial schema (7204997) — 2026-04-20 — Gabriel Farias
+### Changed
+- Achievements removal — Removed the achievements domain and repository; dropped the `achievements` table and related index from the initial database schema. (Commits: 70dd7fb, 7204997; 2026-04-20; Author: Gabriel Farias)
 
 ### Contributors
+- Gabriel Farias — primary contributor for the changes listed above.
 
-- Gabriel Farias
-
----
-
-Notes:
-
-- This file was auto-generated. Edit to add versions, dates, or additional context.
+### Notes
+- This changelog was generated from commit messages. For formal releases, add a version header (for example `## [v0.1.0] - 2026-04-20`) and move items from `Unreleased` under that version.
+- If you prefer the changelog in Portuguese or want different phrasing, I can translate or adjust it.
