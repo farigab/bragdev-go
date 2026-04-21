@@ -17,241 +17,322 @@ import (
 	"github.com/farigab/bragdoc/internal/security"
 )
 
-// RegisterAuthRoutes registers authentication-related endpoints.
-// oauth: integration.OAuthService (GitHub), jwtSvc: TokenService, userRepo/refreshRepo: persistence
-func RegisterAuthRoutes(r chi.Router, cfg *config.Config, oauth integration.OAuthService, jwtSvc security.TokenService, userRepo repository.UserRepository, refreshRepo repository.RefreshTokenRepository) {
-	r.Get("/api/auth/github", func(w http.ResponseWriter, req *http.Request) {
-		state := uuid.New().String()
-		redirectUri := cfg.GitHubRedirectURI
-		if redirectUri == "" {
-			redirectUri = "http://localhost:8080/api/auth/callback"
-		}
+const (
+	loginErrorURL = "/login?error=auth_failed"
+	maxBodyBytes  = 1 << 20 // 1 MiB
+)
 
-		// Store state in a short-lived HttpOnly cookie for CSRF validation in the callback.
-		http.SetCookie(w, &http.Cookie{
-			Name:     "oauth_state",
-			Value:    state,
-			MaxAge:   300, // 5 minutes
-			HttpOnly: true,
-			Secure:   cfg.CookieSecure,
-			SameSite: http.SameSiteLaxMode,
-			Path:     "/",
-		})
-
-		// Build authorize URL with proper URL-encoding for redirect_uri and state
-		base := "https://github.com/login/oauth/authorize"
-		q := url.Values{}
-		q.Set("client_id", cfg.GitHubClientID)
-		q.Set("redirect_uri", redirectUri)
-		q.Set("scope", "read:user,user:email")
-		q.Set("state", state)
-		authorizeUrl := base + "?" + q.Encode()
-
-		http.Redirect(w, req, authorizeUrl, http.StatusFound)
-	})
-
-	// Callback: exchange code, get profile, create user, generate tokens, set cookies and redirect
-	r.Get("/api/auth/callback", func(w http.ResponseWriter, req *http.Request) {
-		// Validate CSRF state before processing anything else.
-		stateCookie, err := req.Cookie("oauth_state")
-		if err != nil || stateCookie.Value == "" {
-			http.Error(w, "missing state", http.StatusBadRequest)
-			return
-		}
-		if stateParam := req.URL.Query().Get("state"); stateParam == "" || stateParam != stateCookie.Value {
-			http.Error(w, "invalid state", http.StatusBadRequest)
-			return
-		}
-		// Clear the state cookie immediately after validation.
-		http.SetCookie(w, &http.Cookie{Name: "oauth_state", MaxAge: -1, Path: "/"})
-
-		code := req.URL.Query().Get("code")
-		if code == "" {
-			http.Error(w, "code missing", http.StatusBadRequest)
-			return
-		}
-
-		redirectUri := cfg.GitHubRedirectURI
-		if redirectUri == "" {
-			redirectUri = "http://localhost:8080/api/auth/callback"
-		}
-
-		accessToken, err := oauth.ExchangeCodeForToken(code, redirectUri)
-		if err != nil {
-			log.Printf("error exchanging code: %v", err)
-			http.Redirect(w, req, cfg.FrontendRedirectURI+"/login?error=auth_failed", http.StatusFound)
-			return
-		}
-
-		profile, err := oauth.GetUserProfile(accessToken)
-		if err != nil {
-			log.Printf("error fetching profile: %v", err)
-			http.Redirect(w, req, cfg.FrontendRedirectURI+"/login?error=auth_failed", http.StatusFound)
-			return
-		}
-
-		loginRaw, _ := profile["login"].(string)
-		nameRaw, _ := profile["name"].(string)
-		avatarRaw, _ := profile["avatar_url"].(string)
-		if nameRaw == "" {
-			nameRaw = loginRaw
-		}
-
-		// create or update user
-		user := domain.NewUser(loginRaw, nameRaw, avatarRaw)
-		user.GitHubAccessToken = accessToken
-		savedUser, err := userRepo.Save(user)
-		if err != nil {
-			log.Printf("error saving user: %v", err)
-			http.Redirect(w, req, cfg.FrontendRedirectURI+"/login?error=auth_failed", http.StatusFound)
-			return
-		}
-
-		// generate JWT
-		jwtToken, err := jwtSvc.GenerateToken(savedUser.Login, map[string]interface{}{"name": savedUser.Name, "avatar": savedUser.AvatarURL})
-		if err != nil {
-			log.Printf("error generating jwt: %v", err)
-			http.Redirect(w, req, cfg.FrontendRedirectURI+"/login?error=auth_failed", http.StatusFound)
-			return
-		}
-
-		// create refresh token
-		refreshTokenStr := uuid.New().String()
-		expiresAt := time.Now().Add(7 * 24 * time.Hour)
-		rt := domain.NewRefreshToken(refreshTokenStr, savedUser.Login, expiresAt)
-		_, err = refreshRepo.Save(rt)
-		if err != nil {
-			log.Printf("error saving refresh token: %v", err)
-			http.Redirect(w, req, cfg.FrontendRedirectURI+"/login?error=auth_failed", http.StatusFound)
-			return
-		}
-
-		// set cookies
-		setCookie(w, "token", jwtToken, 15*60, cfg)
-		setCookie(w, "refreshToken", refreshTokenStr, 7*24*60*60, cfg)
-
-		log.Printf("User authenticated: %s", savedUser.Login)
-		http.Redirect(w, req, cfg.FrontendRedirectURI, http.StatusFound)
-	})
-
-	// Refresh access token using refresh token cookie
-	r.Post("/api/auth/refresh", func(w http.ResponseWriter, req *http.Request) {
-		cookie, err := req.Cookie("refreshToken")
-		if err != nil || cookie.Value == "" {
-			clearAuthCookies(w, cfg)
-			http.Error(w, "no refresh token", http.StatusUnauthorized)
-			return
-		}
-
-		oldRt, err := refreshRepo.FindByToken(cookie.Value)
-		if err != nil {
-			clearAuthCookies(w, cfg)
-			http.Error(w, "invalid refresh token", http.StatusUnauthorized)
-			return
-		}
-		if oldRt.Revoked || time.Now().After(oldRt.ExpiresAt) {
-			clearAuthCookies(w, cfg)
-			http.Error(w, "refresh token expired", http.StatusUnauthorized)
-			return
-		}
-
-		user, err := userRepo.FindByLogin(oldRt.UserLogin)
-		if err != nil {
-			clearAuthCookies(w, cfg)
-			http.Error(w, "user not found", http.StatusUnauthorized)
-			return
-		}
-
-		// generate new access token and new refresh token (rotate)
-		jwtToken, err := jwtSvc.GenerateToken(user.Login, map[string]interface{}{"name": user.Name, "avatar": user.AvatarURL})
-		if err != nil {
-			http.Error(w, "failed to generate token", http.StatusInternalServerError)
-			return
-		}
-
-		newToken := uuid.New().String()
-		newExpires := time.Now().Add(7 * 24 * time.Hour)
-		newRt := domain.NewRefreshToken(newToken, user.Login, newExpires)
-		_, err = refreshRepo.Save(newRt)
-		if err != nil {
-			http.Error(w, "failed to save refresh token", http.StatusInternalServerError)
-			return
-		}
-
-		// revoke/delete old token
-		_ = refreshRepo.Delete(oldRt)
-
-		setCookie(w, "token", jwtToken, 15*60, cfg)
-		setCookie(w, "refreshToken", newToken, 7*24*60*60, cfg)
-
-		w.WriteHeader(http.StatusOK)
-	})
-
-	// Logout - revoke refresh tokens and clear cookies
-	r.Post("/api/auth/logout", func(w http.ResponseWriter, req *http.Request) {
-		// try to extract user from token cookie
-		tokenCookie, err := req.Cookie("token")
-		if err == nil && tokenCookie.Value != "" {
-			if login, err := jwtSvc.ExtractUserLogin(tokenCookie.Value); err == nil && login != "" {
-				_ = refreshRepo.DeleteAllByUserLogin(login)
-			}
-		}
-		clearAuthCookies(w, cfg)
-		w.WriteHeader(http.StatusOK)
-	})
-
-	// Save GitHub token - expects JSON {"token":"..."}
-	r.Post("/api/auth/github/token", func(w http.ResponseWriter, req *http.Request) {
-		tokenCookie, err := req.Cookie("token")
-		if err != nil || tokenCookie.Value == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		login, err := jwtSvc.ExtractUserLogin(tokenCookie.Value)
-		if err != nil || login == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		var payload struct {
-			Token string `json:"token"`
-		}
-		req.Body = http.MaxBytesReader(w, req.Body, maxBodyBytes)
-		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
-			http.Error(w, "invalid body", http.StatusBadRequest)
-			return
-		}
-
-		u := &domain.User{Login: login, GitHubAccessToken: payload.Token}
-		_, err = userRepo.Save(u)
-		if err != nil {
-			http.Error(w, "failed to save token", http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	})
-
-	// Clear GitHub token
-	r.Delete("/api/auth/github/token", func(w http.ResponseWriter, req *http.Request) {
-		tokenCookie, err := req.Cookie("token")
-		if err != nil || tokenCookie.Value == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		login, err := jwtSvc.ExtractUserLogin(tokenCookie.Value)
-		if err != nil || login == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		u := &domain.User{Login: login, GitHubAccessToken: ""}
-		_, err = userRepo.Save(u)
-		if err != nil {
-			http.Error(w, "failed to clear token", http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	})
+// authHandler holds dependencies for all auth routes, avoiding re-capturing
+// the same variables in every closure and making each handler independently testable.
+type authHandler struct {
+	cfg         *config.Config
+	oauth       integration.OAuthService
+	jwtSvc      security.TokenService
+	userRepo    repository.UserRepository
+	refreshRepo repository.RefreshTokenRepository
 }
+
+// RegisterAuthRoutes registers authentication-related endpoints.
+func RegisterAuthRoutes(r chi.Router, cfg *config.Config, oauth integration.OAuthService, jwtSvc security.TokenService, userRepo repository.UserRepository, refreshRepo repository.RefreshTokenRepository) {
+	h := &authHandler{cfg, oauth, jwtSvc, userRepo, refreshRepo}
+
+	r.Get("/api/auth/github", h.handleGitHubLogin)
+	r.Get("/api/auth/callback", h.handleGitHubCallback)
+	r.Post("/api/auth/refresh", h.handleRefresh)
+	r.Post("/api/auth/logout", h.handleLogout)
+	r.Post("/api/auth/github/token", h.handleSaveGitHubToken)
+	r.Delete("/api/auth/github/token", h.handleClearGitHubToken)
+}
+
+// handleGitHubLogin initiates the OAuth flow by redirecting to GitHub.
+func (h *authHandler) handleGitHubLogin(w http.ResponseWriter, r *http.Request) {
+	state := uuid.New().String()
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "oauth_state",
+		Value:    state,
+		MaxAge:   300,
+		HttpOnly: true,
+		Secure:   h.cfg.CookieSecure,
+		SameSite: http.SameSiteLaxMode,
+		Path:     "/",
+	})
+
+	q := url.Values{}
+	q.Set("client_id", h.cfg.GitHubClientID)
+	q.Set("redirect_uri", h.resolveRedirectURI())
+	q.Set("scope", "read:user,user:email")
+	q.Set("state", state)
+
+	http.Redirect(w, r, "https://github.com/login/oauth/authorize?"+q.Encode(), http.StatusFound)
+}
+
+// handleGitHubCallback completes the OAuth flow: validates state, exchanges code,
+// fetches profile, upserts the user, issues JWT + refresh token, then redirects.
+func (h *authHandler) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
+	if err := h.validateOAuthState(w, r); err != nil {
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		http.Error(w, "code missing", http.StatusBadRequest)
+		return
+	}
+
+	accessToken, err := h.oauth.ExchangeCodeForToken(code, h.resolveRedirectURI())
+	if err != nil {
+		log.Printf("error exchanging code: %v", err)
+		h.redirectLoginError(w, r)
+		return
+	}
+
+	savedUser, err := h.upsertUserFromOAuth(accessToken)
+	if err != nil {
+		h.redirectLoginError(w, r)
+		return
+	}
+
+	if err := h.issueAuthCookies(w, savedUser); err != nil {
+		h.redirectLoginError(w, r)
+		return
+	}
+
+	log.Printf("User authenticated: %s", savedUser.Login)
+	http.Redirect(w, r, h.cfg.FrontendRedirectURI, http.StatusFound)
+}
+
+// handleRefresh rotates the refresh token and issues a new JWT.
+func (h *authHandler) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("refreshToken")
+	if err != nil || cookie.Value == "" {
+		clearAuthCookies(w, h.cfg)
+		http.Error(w, "no refresh token", http.StatusUnauthorized)
+		return
+	}
+
+	oldRt, err := h.refreshRepo.FindByToken(cookie.Value)
+	if err != nil {
+		clearAuthCookies(w, h.cfg)
+		http.Error(w, "invalid refresh token", http.StatusUnauthorized)
+		return
+	}
+
+	if oldRt.Revoked || time.Now().After(oldRt.ExpiresAt) {
+		clearAuthCookies(w, h.cfg)
+		http.Error(w, "refresh token expired", http.StatusUnauthorized)
+		return
+	}
+
+	user, err := h.userRepo.FindByLogin(oldRt.UserLogin)
+	if err != nil {
+		clearAuthCookies(w, h.cfg)
+		http.Error(w, "user not found", http.StatusUnauthorized)
+		return
+	}
+
+	if err := h.rotateTokens(w, user, oldRt); err != nil {
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleLogout revokes all refresh tokens for the user and clears auth cookies.
+func (h *authHandler) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if login := h.loginFromCookie(r); login != "" {
+		_ = h.refreshRepo.DeleteAllByUserLogin(login)
+	}
+	clearAuthCookies(w, h.cfg)
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleSaveGitHubToken persists a manually-supplied GitHub access token for the current user.
+func (h *authHandler) handleSaveGitHubToken(w http.ResponseWriter, r *http.Request) {
+	login, ok := h.requireLogin(w, r)
+	if !ok {
+		return
+	}
+
+	var payload struct {
+		Token string `json:"token"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+
+	if _, err := h.userRepo.Save(&domain.User{Login: login, GitHubAccessToken: payload.Token}); err != nil {
+		http.Error(w, "failed to save token", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleClearGitHubToken removes the stored GitHub access token for the current user.
+func (h *authHandler) handleClearGitHubToken(w http.ResponseWriter, r *http.Request) {
+	login, ok := h.requireLogin(w, r)
+	if !ok {
+		return
+	}
+
+	if _, err := h.userRepo.Save(&domain.User{Login: login, GitHubAccessToken: ""}); err != nil {
+		http.Error(w, "failed to clear token", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// --- private helpers ---------------------------------------------------------
+
+// validateOAuthState checks the CSRF state cookie against the query parameter
+// and immediately clears the cookie on success.
+func (h *authHandler) validateOAuthState(w http.ResponseWriter, r *http.Request) error {
+	stateCookie, err := r.Cookie("oauth_state")
+	if err != nil || stateCookie.Value == "" {
+		http.Error(w, "missing state", http.StatusBadRequest)
+		return err
+	}
+
+	stateParam := r.URL.Query().Get("state")
+	if stateParam == "" || stateParam != stateCookie.Value {
+		http.Error(w, "invalid state", http.StatusBadRequest)
+		return http.ErrNoCookie // non-nil sentinel; caller only checks nil/non-nil
+	}
+
+	http.SetCookie(w, &http.Cookie{Name: "oauth_state", MaxAge: -1, Path: "/"})
+	return nil
+}
+
+// upsertUserFromOAuth fetches the GitHub profile for the given access token
+// and saves (create or update) the corresponding User record.
+func (h *authHandler) upsertUserFromOAuth(accessToken string) (*domain.User, error) {
+	profile, err := h.oauth.GetUserProfile(accessToken)
+	if err != nil {
+		log.Printf("error fetching profile: %v", err)
+		return nil, err
+	}
+
+	login, _ := profile["login"].(string)
+	name, _ := profile["name"].(string)
+	avatar, _ := profile["avatar_url"].(string)
+	if name == "" {
+		name = login
+	}
+
+	user := domain.NewUser(login, name, avatar)
+	user.GitHubAccessToken = accessToken
+
+	saved, err := h.userRepo.Save(user)
+	if err != nil {
+		log.Printf("error saving user: %v", err)
+		return nil, err
+	}
+	return saved, nil
+}
+
+// issueAuthCookies generates a JWT and a fresh refresh token for the user,
+// then writes both as HttpOnly cookies.
+func (h *authHandler) issueAuthCookies(w http.ResponseWriter, user *domain.User) error {
+	jwtToken, err := h.jwtSvc.GenerateToken(user.Login, map[string]interface{}{
+		"name":   user.Name,
+		"avatar": user.AvatarURL,
+	})
+	if err != nil {
+		log.Printf("error generating jwt: %v", err)
+		return err
+	}
+
+	refreshTokenStr, err := h.createRefreshToken(user.Login)
+	if err != nil {
+		log.Printf("error saving refresh token: %v", err)
+		return err
+	}
+
+	setCookie(w, "token", jwtToken, 15*60, h.cfg)
+	setCookie(w, "refreshToken", refreshTokenStr, 7*24*60*60, h.cfg)
+	return nil
+}
+
+// rotateTokens issues a new JWT + refresh token and revokes the old refresh token.
+func (h *authHandler) rotateTokens(w http.ResponseWriter, user *domain.User, oldRt *domain.RefreshToken) error {
+	jwtToken, err := h.jwtSvc.GenerateToken(user.Login, map[string]interface{}{
+		"name":   user.Name,
+		"avatar": user.AvatarURL,
+	})
+	if err != nil {
+		http.Error(w, "failed to generate token", http.StatusInternalServerError)
+		return err
+	}
+
+	newToken, err := h.createRefreshToken(user.Login)
+	if err != nil {
+		http.Error(w, "failed to save refresh token", http.StatusInternalServerError)
+		return err
+	}
+
+	_ = h.refreshRepo.Delete(oldRt)
+
+	setCookie(w, "token", jwtToken, 15*60, h.cfg)
+	setCookie(w, "refreshToken", newToken, 7*24*60*60, h.cfg)
+	return nil
+}
+
+// createRefreshToken persists a new 7-day refresh token and returns its string value.
+func (h *authHandler) createRefreshToken(userLogin string) (string, error) {
+	token := uuid.New().String()
+	rt := domain.NewRefreshToken(token, userLogin, time.Now().Add(7*24*time.Hour))
+	if _, err := h.refreshRepo.Save(rt); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// requireLogin reads and validates the JWT cookie, writing 401 on failure.
+// Returns the user's login and true on success.
+func (h *authHandler) requireLogin(w http.ResponseWriter, r *http.Request) (string, bool) {
+	cookie, err := r.Cookie("token")
+	if err != nil || cookie.Value == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return "", false
+	}
+	login, err := h.jwtSvc.ExtractUserLogin(cookie.Value)
+	if err != nil || login == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return "", false
+	}
+	return login, true
+}
+
+// loginFromCookie silently extracts the user login from the JWT cookie,
+// returning an empty string on any error (used in non-critical paths like logout).
+func (h *authHandler) loginFromCookie(r *http.Request) string {
+	cookie, err := r.Cookie("token")
+	if err != nil || cookie.Value == "" {
+		return ""
+	}
+	login, err := h.jwtSvc.ExtractUserLogin(cookie.Value)
+	if err != nil {
+		return ""
+	}
+	return login
+}
+
+// resolveRedirectURI returns the configured redirect URI or falls back to localhost.
+func (h *authHandler) resolveRedirectURI() string {
+	if h.cfg.GitHubRedirectURI != "" {
+		return h.cfg.GitHubRedirectURI
+	}
+	return "http://localhost:8080/api/auth/callback"
+}
+
+// redirectLoginError sends the user to the frontend login error page.
+func (h *authHandler) redirectLoginError(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, h.cfg.FrontendRedirectURI+loginErrorURL, http.StatusFound)
+}
+
+// --- package-level cookie helpers --------------------------------------------
 
 func setCookie(w http.ResponseWriter, name, value string, maxAge int, cfg *config.Config) {
 	cookie := &http.Cookie{
@@ -263,12 +344,9 @@ func setCookie(w http.ResponseWriter, name, value string, maxAge int, cfg *confi
 		MaxAge:   maxAge,
 		SameSite: parseSameSite(cfg.CookieSameSite),
 	}
-
-	// Only set Domain when explicitly configured and not localhost
 	if cfg != nil && cfg.CookieDomain != "" && cfg.CookieDomain != "localhost" {
 		cookie.Domain = cfg.CookieDomain
 	}
-
 	http.SetCookie(w, cookie)
 }
 

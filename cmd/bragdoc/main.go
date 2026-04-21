@@ -5,7 +5,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -43,21 +42,20 @@ func main() {
 	r := chi.NewRouter()
 
 	// CORS middleware
-	r.Use(corsMiddleware(cfg))
+	r.Use(appMiddleware.CORSMiddleware(cfg))
 
 	// health
 	r.Get("/api/health", handlers.HealthHandler)
 
 	// wiring
 	userRepo := repository.NewPostgresUserRepo(db)
-	achievementRepo := repository.NewPostgresAchievementRepo(db)
 	refreshRepo := repository.NewPostgresRefreshTokenRepo(db)
 
 	jwtSvc := security.NewJWTService(cfg.JwtSecret, 900) // 15 minutes
 	oauthSvc := integration.NewGitHubOAuthService(cfg.GitHubClientID, cfg.GitHubClientSecret)
 	geminiClient := integration.NewGeminiClient(cfg.GeminiApiKey, cfg.GeminiApiUrl, cfg.GeminiModel)
 	fetcherFactory := integration.GitHubClientFactory{}
-	reportSvc := usecase.NewReportService(userRepo, achievementRepo, fetcherFactory, geminiClient)
+	reportSvc := usecase.NewReportService(userRepo, fetcherFactory, geminiClient)
 
 	// Public auth routes (OAuth flow + token refresh)
 	handlers.RegisterAuthRoutes(r, cfg, oauthSvc, jwtSvc, userRepo, refreshRepo)
@@ -65,7 +63,6 @@ func main() {
 	// Protected routes — require a valid JWT cookie
 	r.Group(func(r chi.Router) {
 		r.Use(appMiddleware.AuthWithRefresh(cfg, jwtSvc, userRepo, refreshRepo))
-		handlers.RegisterAchievementRoutes(r, achievementRepo)
 		handlers.RegisterUserRoutes(r, userRepo)
 		handlers.RegisterGitHubRoutes(r, userRepo)
 		handlers.RegisterReportRoutes(r, reportSvc)
@@ -127,97 +124,4 @@ func runMigrations(db *sqlx.DB, dir string) error {
 		log.Printf("applied migration: %s", n)
 	}
 	return nil
-}
-
-// corsMiddleware returns a chi middleware that sets CORS headers and
-// handles preflight OPTIONS requests. It uses FrontendRedirectURI
-// from config if present, otherwise allows all origins.
-func corsMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
-	// Build allowed origins list from config.FrontendRedirectURI (comma-separated)
-	// or from env APP_ALLOWED_ORIGINS as a fallback.
-	var allowedOrigins []string
-	if cfg != nil && cfg.FrontendRedirectURI != "" {
-		for _, p := range strings.Split(cfg.FrontendRedirectURI, ",") {
-			p = strings.TrimSpace(p)
-			if p == "" {
-				continue
-			}
-			if u, err := url.Parse(p); err == nil && u.Scheme != "" && u.Host != "" {
-				allowedOrigins = append(allowedOrigins, u.Scheme+"://"+u.Host)
-			} else {
-				allowedOrigins = append(allowedOrigins, p)
-			}
-		}
-	}
-	if len(allowedOrigins) == 0 {
-		if env := os.Getenv("APP_ALLOWED_ORIGINS"); env != "" {
-			for _, p := range strings.Split(env, ",") {
-				p = strings.TrimSpace(p)
-				if p == "" {
-					continue
-				}
-				if u, err := url.Parse(p); err == nil && u.Scheme != "" && u.Host != "" {
-					allowedOrigins = append(allowedOrigins, u.Scheme+"://"+u.Host)
-				} else {
-					allowedOrigins = append(allowedOrigins, p)
-				}
-			}
-		}
-	}
-
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			origin := r.Header.Get("Origin")
-
-			// If no allowedOrigins configured, allow any origin
-			if len(allowedOrigins) == 0 {
-				w.Header().Set("Access-Control-Allow-Origin", "*")
-			} else if origin != "" {
-				allowed := false
-				for _, ao := range allowedOrigins {
-					if ao == origin {
-						allowed = true
-						break
-					}
-				}
-				if allowed {
-					w.Header().Set("Access-Control-Allow-Origin", origin)
-					w.Header().Set("Vary", "Origin")
-					// Allow credentials (cookies/auth) for allowed origins
-					w.Header().Set("Access-Control-Allow-Credentials", "true")
-				}
-			}
-
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-			// If the browser sent requested headers in preflight, echo them back
-			// which allows custom headers like `x-health-check`.
-			reqHeaders := r.Header.Get("Access-Control-Request-Headers")
-			if reqHeaders != "" {
-				w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
-			} else {
-				w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Authorization, X-Requested-With, X-Health-Check")
-			}
-
-			if r.Method == http.MethodOptions {
-				// For preflight, ensure origin is allowed
-				if len(allowedOrigins) > 0 && origin != "" {
-					allowed := false
-					for _, ao := range allowedOrigins {
-						if ao == origin {
-							allowed = true
-							break
-						}
-					}
-					if !allowed {
-						http.Error(w, "origin not allowed", http.StatusForbidden)
-						return
-					}
-				}
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
 }
