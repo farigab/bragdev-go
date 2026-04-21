@@ -100,11 +100,16 @@ func (s *JWTService) IsExpired(tokenStr string) bool {
 
 func (s *JWTService) ExtractUserLoginSafe(tokenStr string) (string, error) {
 	claims, err := s.parseToken(tokenStr)
-	if err != nil {
+	// If parsing returned claims despite an error (for example an expired token),
+	// prefer returning the `login` claim when present instead of failing outright.
+	if claims == nil {
 		return "", err
 	}
-	if login, ok := claims["login"].(string); ok {
+	if login, ok := claims["login"].(string); ok && login != "" {
 		return login, nil
+	}
+	if err != nil {
+		return "", err
 	}
 	return "", errors.New("login claim missing")
 }
