@@ -12,6 +12,7 @@ type UserRepository interface {
 	FindByLogin(login string) (*domain.User, error)
 	Save(u *domain.User) (*domain.User, error)
 	ExistsByLogin(login string) (bool, error)
+	ClearGitHubToken(login string) error
 }
 
 // PostgresUserRepo implements UserRepository using Postgres via sqlx.
@@ -41,12 +42,12 @@ func (r *PostgresUserRepo) Save(u *domain.User) (*domain.User, error) {
 	}
 	var out domain.User
 	query := `INSERT INTO users (login, name, avatar_url, github_access_token)
-        VALUES ($1,$2,$3,$4)
-        ON CONFLICT (login) DO UPDATE SET
-            name = EXCLUDED.name,
-            avatar_url = EXCLUDED.avatar_url,
-            github_access_token = EXCLUDED.github_access_token
-        RETURNING login, name, avatar_url, github_access_token`
+		VALUES ($1,$2,$3,$4)
+		ON CONFLICT (login) DO UPDATE SET
+			name = EXCLUDED.name,
+			avatar_url = EXCLUDED.avatar_url,
+			github_access_token = CASE WHEN EXCLUDED.github_access_token <> '' THEN EXCLUDED.github_access_token ELSE users.github_access_token END
+		RETURNING login, name, avatar_url, github_access_token`
 
 	err := r.db.Get(&out, query, u.Login, u.Name, u.AvatarURL, u.GitHubAccessToken)
 	if err != nil {
@@ -63,4 +64,10 @@ func (r *PostgresUserRepo) ExistsByLogin(login string) (bool, error) {
 		return false, err
 	}
 	return exists, nil
+}
+
+// ClearGitHubToken clears the stored GitHub access token for the given user.
+func (r *PostgresUserRepo) ClearGitHubToken(login string) error {
+	_, err := r.db.Exec("UPDATE users SET github_access_token = '' WHERE login = $1", login)
+	return err
 }

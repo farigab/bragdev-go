@@ -28,6 +28,13 @@ func ValidateDateRange(start, end string) (time.Time, time.Time, error) {
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}
+	// When users provide a date without a time (YYYY-MM-DD) they expect the
+	// entire day to be included. Treat the parsed end date as the end of the
+	// day (23:59:59.999999999) so range queries are inclusive of that day.
+	if !e.IsZero() {
+		e = e.Add(24*time.Hour - time.Nanosecond)
+	}
+
 	if !s.IsZero() && !e.IsZero() && s.After(e) {
 		return time.Time{}, time.Time{}, errors.New("startDate must be before or equal endDate")
 	}
