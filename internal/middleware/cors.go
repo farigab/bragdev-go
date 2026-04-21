@@ -9,6 +9,7 @@ import (
 	"github.com/farigab/bragdoc/internal/config"
 )
 
+// CORSMiddleware returns a middleware that sets CORS headers based on config.
 func CORSMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 	allowedOrigins := buildAllowedOrigins(cfg)
 

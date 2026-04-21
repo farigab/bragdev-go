@@ -24,6 +24,7 @@ type CommitFetcherFactory interface {
 // GitHubClientFactory implements CommitFetcherFactory.
 type GitHubClientFactory struct{}
 
+// New returns a CommitFetcher (GitHubClient) authenticated with the given token.
 func (GitHubClientFactory) New(token string) CommitFetcher {
 	return NewGitHubClient(token)
 }
@@ -71,16 +72,16 @@ func (g *GitHubClient) ListRepositories() ([]string, error) {
 
 		if resp.StatusCode != 200 {
 			b, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			closeBody(resp.Body)
 			return nil, fmt.Errorf("github list repos status=%d: %s", resp.StatusCode, string(b))
 		}
 
 		var repos []ghRepo
 		if err := json.NewDecoder(resp.Body).Decode(&repos); err != nil {
-			resp.Body.Close()
+			closeBody(resp.Body)
 			return nil, err
 		}
-		resp.Body.Close()
+		closeBody(resp.Body)
 		if len(repos) == 0 {
 			break
 		}
@@ -96,6 +97,8 @@ func (g *GitHubClient) ListRepositories() ([]string, error) {
 
 // CountCommits estimates the number of commits by using pagination info.
 // ownerRepo must be "owner/repo". Author is the GitHub login (author filter).
+//
+//nolint:gocyclo
 func (g *GitHubClient) CountCommits(ownerRepo, author string, since, until time.Time) (int, error) {
 	// If no author filter is provided, use the fast per_page=1 trick.
 	if author == "" {
@@ -125,13 +128,14 @@ func (g *GitHubClient) CountCommits(ownerRepo, author string, since, until time.
 		if err != nil {
 			return 0, err
 		}
-		defer resp.Body.Close()
+		defer closeBody(resp.Body)
 
 		if resp.StatusCode == 404 {
 			return 0, nil
 		}
 		if resp.StatusCode != 200 {
 			b, _ := io.ReadAll(resp.Body)
+			closeBody(resp.Body)
 			return 0, fmt.Errorf("github commits status=%d: %s", resp.StatusCode, string(b))
 		}
 
@@ -146,8 +150,10 @@ func (g *GitHubClient) CountCommits(ownerRepo, author string, since, until time.
 		// No Link header - decode array and count entries
 		var commits []any
 		if err := json.NewDecoder(resp.Body).Decode(&commits); err != nil {
+			closeBody(resp.Body)
 			return 0, err
 		}
+		closeBody(resp.Body)
 		return len(commits), nil
 	}
 
@@ -168,7 +174,7 @@ func (g *GitHubClient) CountCommits(ownerRepo, author string, since, until time.
 			reqUser.Header.Set("User-Agent", "bragdoc-app")
 			respUser, err := g.client.Do(reqUser)
 			if err == nil {
-				defer respUser.Body.Close()
+				defer closeBody(respUser.Body)
 				if respUser.StatusCode == 200 {
 					var u struct {
 						Name string `json:"name"`
@@ -208,13 +214,14 @@ func (g *GitHubClient) CountCommits(ownerRepo, author string, since, until time.
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 
 	if resp.StatusCode == 404 {
 		return 0, nil
 	}
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(resp.Body)
+		closeBody(resp.Body)
 		return 0, fmt.Errorf("github commits status=%d: %s", resp.StatusCode, string(b))
 	}
 
@@ -266,12 +273,12 @@ func (g *GitHubClient) CountCommits(ownerRepo, author string, since, until time.
 			return 0, err
 		}
 		if resp.StatusCode == 404 {
-			resp.Body.Close()
+			closeBody(resp.Body)
 			return 0, nil
 		}
 		if resp.StatusCode != 200 {
 			b, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			closeBody(resp.Body)
 			return 0, fmt.Errorf("github commits status=%d: %s", resp.StatusCode, string(b))
 		}
 
@@ -286,10 +293,10 @@ func (g *GitHubClient) CountCommits(ownerRepo, author string, since, until time.
 			} `json:"author"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&ghCommits); err != nil {
-			resp.Body.Close()
+			closeBody(resp.Body)
 			return 0, err
 		}
-		resp.Body.Close()
+		closeBody(resp.Body)
 
 		if len(ghCommits) == 0 {
 			break
@@ -357,6 +364,8 @@ type CommitInfo struct {
 // ListCommitMessages returns commits (sha, message, author, date) for the
 // given repository. If author is provided, it will try a server-side filter
 // first and then fall back to client-side filtering similar to CountCommits.
+//
+//nolint:gocyclo
 func (g *GitHubClient) ListCommitMessages(ownerRepo, author string, since, until time.Time) ([]CommitInfo, error) {
 	var out []CommitInfo
 	perPage := 100
@@ -372,7 +381,7 @@ func (g *GitHubClient) ListCommitMessages(ownerRepo, author string, since, until
 			reqUser.Header.Set("User-Agent", "bragdoc-app")
 			respUser, err := g.client.Do(reqUser)
 			if err == nil {
-				defer respUser.Body.Close()
+				defer closeBody(respUser.Body)
 				if respUser.StatusCode == 200 {
 					var u struct {
 						Name string `json:"name"`
@@ -416,12 +425,12 @@ func (g *GitHubClient) ListCommitMessages(ownerRepo, author string, since, until
 				return nil, err
 			}
 			if resp.StatusCode == 404 {
-				resp.Body.Close()
+				closeBody(resp.Body)
 				return nil, nil
 			}
 			if resp.StatusCode != 200 {
 				b, _ := io.ReadAll(resp.Body)
-				resp.Body.Close()
+				closeBody(resp.Body)
 				return nil, fmt.Errorf("github commits status=%d: %s", resp.StatusCode, string(b))
 			}
 
@@ -439,10 +448,10 @@ func (g *GitHubClient) ListCommitMessages(ownerRepo, author string, since, until
 				} `json:"author"`
 			}
 			if err := json.NewDecoder(resp.Body).Decode(&ghCommits); err != nil {
-				resp.Body.Close()
+				closeBody(resp.Body)
 				return nil, err
 			}
-			resp.Body.Close()
+			closeBody(resp.Body)
 
 			if len(ghCommits) == 0 {
 				break
@@ -502,12 +511,12 @@ func (g *GitHubClient) ListCommitMessages(ownerRepo, author string, since, until
 			return nil, err
 		}
 		if resp.StatusCode == 404 {
-			resp.Body.Close()
+			closeBody(resp.Body)
 			return nil, nil
 		}
 		if resp.StatusCode != 200 {
 			b, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			closeBody(resp.Body)
 			return nil, fmt.Errorf("github commits status=%d: %s", resp.StatusCode, string(b))
 		}
 
@@ -525,10 +534,10 @@ func (g *GitHubClient) ListCommitMessages(ownerRepo, author string, since, until
 			} `json:"author"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&ghCommits); err != nil {
-			resp.Body.Close()
+			closeBody(resp.Body)
 			return nil, err
 		}
-		resp.Body.Close()
+		closeBody(resp.Body)
 
 		if len(ghCommits) == 0 {
 			break

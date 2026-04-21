@@ -1,8 +1,8 @@
+// Package main is the server entrypoint for the bragdoc application.
 package main
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +17,7 @@ import (
 	"github.com/farigab/bragdoc/internal/config"
 	"github.com/farigab/bragdoc/internal/handlers"
 	"github.com/farigab/bragdoc/internal/integration"
+	"github.com/farigab/bragdoc/internal/logger"
 	appMiddleware "github.com/farigab/bragdoc/internal/middleware"
 	"github.com/farigab/bragdoc/internal/repository"
 	"github.com/farigab/bragdoc/internal/security"
@@ -26,16 +27,25 @@ import (
 func main() {
 	cfg := config.Load()
 
+	// Initialize logger early so startup messages are visible and consistent
+	logger.Init(cfg.LogLevel)
+
 	db, err := sqlx.Connect("postgres", cfg.DBUrl)
 	if err != nil {
-		log.Fatalf("failed to connect to db: %v", err)
+		logger.Errorf("failed to connect to db: %v", err)
+		os.Exit(1)
 	}
-	defer db.Close()
+	defer func() {
+		if cerr := db.Close(); cerr != nil {
+			logger.Errorf("failed to close db: %v", cerr)
+		}
+	}()
 
 	// Optionally run migrations if MIGRATE=true
 	if strings.ToLower(os.Getenv("MIGRATE")) == "true" {
 		if err := runMigrations(db, "db/migrations"); err != nil {
-			log.Fatalf("migrations failed: %v", err)
+			logger.Errorf("migrations failed: %v", err)
+			os.Exit(1)
 		}
 	}
 
@@ -43,6 +53,9 @@ func main() {
 
 	// CORS middleware
 	r.Use(appMiddleware.CORSMiddleware(cfg))
+
+	// Request logging + panic recovery
+	r.Use(appMiddleware.RequestLogger)
 
 	// health
 	r.Get("/api/health", handlers.HealthHandler)
@@ -53,7 +66,7 @@ func main() {
 
 	jwtSvc := security.NewJWTService(cfg.JwtSecret, 900) // 15 minutes
 	oauthSvc := integration.NewGitHubOAuthService(cfg.GitHubClientID, cfg.GitHubClientSecret)
-	geminiClient := integration.NewGeminiClient(cfg.GeminiApiKey, cfg.GeminiApiUrl, cfg.GeminiModel)
+	geminiClient := integration.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiAPIURL, cfg.GeminiModel)
 	fetcherFactory := integration.GitHubClientFactory{}
 	reportSvc := usecase.NewReportService(userRepo, fetcherFactory, geminiClient)
 
@@ -74,7 +87,7 @@ func main() {
 		defer ticker.Stop()
 		for range ticker.C {
 			if err := refreshRepo.DeleteExpiredTokens(); err != nil {
-				log.Printf("failed cleaning expired refresh tokens: %v", err)
+				logger.Errorw("failed cleaning expired refresh tokens", "err", err)
 			}
 		}
 	}()
@@ -84,15 +97,17 @@ func main() {
 		port = "8080"
 	}
 
-	log.Printf("Starting server on :%s", port)
+	logger.Infow("starting server", "port", port)
 	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
-		log.Fatalf("failed to bind port: %v", err)
+		logger.Errorf("failed to bind port: %v", err)
+		os.Exit(1)
 	}
 
-	log.Printf("Server started on :%s", port)
+	logger.Infow("server started", "port", port)
 	if err := http.Serve(ln, r); err != nil {
-		log.Fatalf("server error: %v", err)
+		logger.Errorf("server error: %v", err)
+		os.Exit(1)
 	}
 }
 
@@ -121,7 +136,7 @@ func runMigrations(db *sqlx.DB, dir string) error {
 		if _, err := db.Exec(sql); err != nil {
 			return fmt.Errorf("exec migration %s: %w", n, err)
 		}
-		log.Printf("applied migration: %s", n)
+		logger.Infow("applied migration", "migration", n)
 	}
 	return nil
 }

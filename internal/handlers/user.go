@@ -2,11 +2,11 @@ package handlers
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/farigab/bragdoc/internal/logger"
 	"github.com/farigab/bragdoc/internal/middleware"
 	"github.com/farigab/bragdoc/internal/repository"
 )
@@ -23,7 +23,7 @@ func RegisterUserRoutes(r chi.Router, userRepo repository.UserRepository) {
 
 		u, err := userRepo.FindByLogin(userLogin)
 		if err != nil {
-			log.Printf("user not found: %v", err)
+			logger.Errorw("user not found", "err", err)
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}

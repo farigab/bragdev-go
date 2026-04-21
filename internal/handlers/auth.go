@@ -1,8 +1,8 @@
+// Package handlers contains HTTP handler registrations and implementations.
 package handlers
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"net/url"
 	"time"
@@ -13,6 +13,7 @@ import (
 	"github.com/farigab/bragdoc/internal/config"
 	"github.com/farigab/bragdoc/internal/domain"
 	"github.com/farigab/bragdoc/internal/integration"
+	"github.com/farigab/bragdoc/internal/logger"
 	"github.com/farigab/bragdoc/internal/repository"
 	"github.com/farigab/bragdoc/internal/security"
 )
@@ -82,7 +83,7 @@ func (h *authHandler) handleGitHubCallback(w http.ResponseWriter, r *http.Reques
 
 	accessToken, err := h.oauth.ExchangeCodeForToken(code, h.resolveRedirectURI())
 	if err != nil {
-		log.Printf("error exchanging code: %v", err)
+		logger.Errorw("error exchanging code", "err", err)
 		h.redirectLoginError(w, r)
 		return
 	}
@@ -98,7 +99,7 @@ func (h *authHandler) handleGitHubCallback(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	log.Printf("User authenticated: %s", savedUser.Login)
+	logger.Infow("user authenticated", "login", savedUser.Login)
 	http.Redirect(w, r, h.cfg.FrontendRedirectURI, http.StatusFound)
 }
 
@@ -210,7 +211,7 @@ func (h *authHandler) validateOAuthState(w http.ResponseWriter, r *http.Request)
 func (h *authHandler) upsertUserFromOAuth(accessToken string) (*domain.User, error) {
 	profile, err := h.oauth.GetUserProfile(accessToken)
 	if err != nil {
-		log.Printf("error fetching profile: %v", err)
+		logger.Errorw("error fetching profile", "err", err)
 		return nil, err
 	}
 
@@ -226,7 +227,7 @@ func (h *authHandler) upsertUserFromOAuth(accessToken string) (*domain.User, err
 
 	saved, err := h.userRepo.Save(user)
 	if err != nil {
-		log.Printf("error saving user: %v", err)
+		logger.Errorw("error saving user", "err", err)
 		return nil, err
 	}
 	return saved, nil
@@ -240,13 +241,13 @@ func (h *authHandler) issueAuthCookies(w http.ResponseWriter, user *domain.User)
 		"avatar": user.AvatarURL,
 	})
 	if err != nil {
-		log.Printf("error generating jwt: %v", err)
+		logger.Errorw("error generating jwt", "err", err)
 		return err
 	}
 
 	refreshTokenStr, err := h.createRefreshToken(user.Login)
 	if err != nil {
-		log.Printf("error saving refresh token: %v", err)
+		logger.Errorw("error saving refresh token", "err", err)
 		return err
 	}
 
@@ -335,17 +336,27 @@ func (h *authHandler) redirectLoginError(w http.ResponseWriter, r *http.Request)
 // --- package-level cookie helpers --------------------------------------------
 
 func setCookie(w http.ResponseWriter, name, value string, maxAge int, cfg *config.Config) {
+	// safely read cfg fields only when cfg is not nil
+	secure := false
+	sameSite := http.SameSiteLaxMode
+	var domain string
+	if cfg != nil {
+		secure = cfg.CookieSecure
+		sameSite = parseSameSite(cfg.CookieSameSite)
+		domain = cfg.CookieDomain
+	}
+
 	cookie := &http.Cookie{
 		Name:     name,
 		Value:    value,
 		HttpOnly: true,
-		Secure:   cfg.CookieSecure,
+		Secure:   secure,
 		Path:     "/",
 		MaxAge:   maxAge,
-		SameSite: parseSameSite(cfg.CookieSameSite),
+		SameSite: sameSite,
 	}
-	if cfg != nil && cfg.CookieDomain != "" && cfg.CookieDomain != "localhost" {
-		cookie.Domain = cfg.CookieDomain
+	if domain != "" && domain != "localhost" {
+		cookie.Domain = domain
 	}
 	http.SetCookie(w, cookie)
 }

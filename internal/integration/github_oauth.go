@@ -23,10 +23,12 @@ type GitHubOAuthService struct {
 	clientSecret string
 }
 
+// NewGitHubOAuthService creates a new GitHubOAuthService using the provided client credentials.
 func NewGitHubOAuthService(clientID, clientSecret string) *GitHubOAuthService {
 	return &GitHubOAuthService{client: http.DefaultClient, clientID: clientID, clientSecret: clientSecret}
 }
 
+// ExchangeCodeForToken exchanges an OAuth code for an access token.
 func (s *GitHubOAuthService) ExchangeCodeForToken(code string, redirectURI string) (string, error) {
 	payload := map[string]string{
 		"client_id":     s.clientID,
@@ -51,7 +53,7 @@ func (s *GitHubOAuthService) ExchangeCodeForToken(code string, redirectURI strin
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -80,6 +82,7 @@ func (s *GitHubOAuthService) ExchangeCodeForToken(code string, redirectURI strin
 	return "", errors.New("access_token not found in response")
 }
 
+// GetUserProfile retrieves the GitHub profile for the given access token.
 func (s *GitHubOAuthService) GetUserProfile(accessToken string) (map[string]interface{}, error) {
 	req, _ := http.NewRequest("GET", "https://api.github.com/user", nil)
 	req.Header.Set("Authorization", "Bearer "+accessToken)
@@ -87,7 +90,7 @@ func (s *GitHubOAuthService) GetUserProfile(accessToken string) (map[string]inte
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 	if resp.StatusCode/100 != 2 {
 		return nil, errors.New("non-2xx from github user api")
 	}
