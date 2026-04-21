@@ -1,3 +1,4 @@
+// Package report contains helpers to build prompts used to generate reports.
 package report
 
 import (

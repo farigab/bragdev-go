@@ -1,7 +1,7 @@
+// Package config handles loading application configuration from environment.
 package config
 
 import (
-	"log"
 	"os"
 
 	"github.com/joho/godotenv"
@@ -13,21 +13,20 @@ type Config struct {
 	JwtSecret           string
 	GitHubClientID      string
 	GitHubClientSecret  string
-	GeminiApiKey        string
-	GeminiApiUrl        string
+	GeminiAPIKey        string
+	GeminiAPIURL        string
 	GeminiModel         string
 	GitHubRedirectURI   string
 	FrontendRedirectURI string
 	CookieDomain        string
 	CookieSecure        bool
 	CookieSameSite      string
+	LogLevel            string
 }
 
 // Load carrega variáveis de ambiente (.env opcional) e retorna a configuração.
 func Load() *Config {
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file loaded:", err)
-	}
+	_ = godotenv.Load() // .env is optional; ignore load errors
 	gitHubRedirect := os.Getenv("GITHUB_OAUTH_REDIRECT_URI")
 	if gitHubRedirect == "" {
 		gitHubRedirect = "http://localhost:8080/api/auth/callback"
@@ -48,9 +47,9 @@ func Load() *Config {
 		cookieSameSite = "Lax"
 	}
 
-	geminiUrl := os.Getenv("GEMINI_API_URL")
-	if geminiUrl == "" {
-		geminiUrl = "https://generativelanguage.googleapis.com/v1"
+	geminiURL := os.Getenv("GEMINI_API_URL")
+	if geminiURL == "" {
+		geminiURL = "https://generativelanguage.googleapis.com/v1"
 	}
 	geminiModel := os.Getenv("GEMINI_MODEL")
 	if geminiModel == "" {
@@ -62,13 +61,21 @@ func Load() *Config {
 		JwtSecret:           os.Getenv("JWT_SECRET"),
 		GitHubClientID:      os.Getenv("GITHUB_OAUTH_CLIENT_ID"),
 		GitHubClientSecret:  os.Getenv("GITHUB_OAUTH_CLIENT_SECRET"),
-		GeminiApiKey:        os.Getenv("GEMINI_API_KEY"),
-		GeminiApiUrl:        geminiUrl,
+		GeminiAPIKey:        os.Getenv("GEMINI_API_KEY"),
+		GeminiAPIURL:        geminiURL,
 		GeminiModel:         geminiModel,
 		GitHubRedirectURI:   gitHubRedirect,
 		FrontendRedirectURI: frontendRedirect,
 		CookieDomain:        cookieDomain,
 		CookieSecure:        os.Getenv("APP_COOKIE_SECURE") == "true",
 		CookieSameSite:      cookieSameSite,
+		LogLevel:            defaultString(os.Getenv("LOG_LEVEL"), "info"),
 	}
+}
+
+func defaultString(v, d string) string {
+	if v == "" {
+		return d
+	}
+	return v
 }

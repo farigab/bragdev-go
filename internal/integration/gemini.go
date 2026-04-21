@@ -27,7 +27,7 @@ type GenerationConfig struct {
 type GeminiClient struct {
 	client           *http.Client
 	apiKey           string
-	apiUrl           string
+	apiURL           string
 	model            string
 	generationConfig GenerationConfig
 }
@@ -42,14 +42,15 @@ func DefaultGenerationConfig() GenerationConfig {
 	}
 }
 
-func NewGeminiClient(apiKey, apiUrl, model string) *GeminiClient {
-	if apiUrl == "" {
-		apiUrl = "https://generativelanguage.googleapis.com/v1"
+// NewGeminiClient creates a new GeminiClient configured with apiKey and model.
+func NewGeminiClient(apiKey, apiURL, model string) *GeminiClient {
+	if apiURL == "" {
+		apiURL = "https://generativelanguage.googleapis.com/v1"
 	}
 	return &GeminiClient{
 		client:           &http.Client{Timeout: 30 * time.Second},
 		apiKey:           apiKey,
-		apiUrl:           apiUrl,
+		apiURL:           apiURL,
 		model:            model,
 		generationConfig: DefaultGenerationConfig(),
 	}
@@ -68,7 +69,7 @@ func (g *GeminiClient) GenerateReport(prompt string) (string, error) {
 		return "", errors.New("gemini api key not configured")
 	}
 
-	url := fmt.Sprintf("%s/models/%s:generateContent?key=%s", g.apiUrl, g.model, g.apiKey)
+	url := fmt.Sprintf("%s/models/%s:generateContent?key=%s", g.apiURL, g.model, g.apiKey)
 
 	body := map[string]any{
 		"contents": []map[string]any{
@@ -96,7 +97,7 @@ func (g *GeminiClient) GenerateReport(prompt string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer closeBody(resp.Body)
 
 	respBody, _ := io.ReadAll(resp.Body)
 

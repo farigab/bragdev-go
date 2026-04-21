@@ -1,3 +1,4 @@
+// Package usecase contains business logic implementations used by handlers.
 package usecase
 
 import (
@@ -30,6 +31,7 @@ type ReportService struct {
 	ai             integration.AIReportGenerator
 }
 
+// NewReportService constructs a ReportService with required dependencies.
 func NewReportService(
 	userRepo repository.UserRepository,
 	fetcherFactory integration.CommitFetcherFactory,

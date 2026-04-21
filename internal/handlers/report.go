@@ -2,15 +2,17 @@ package handlers
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/farigab/bragdoc/internal/httpresp"
+	"github.com/farigab/bragdoc/internal/logger"
 	"github.com/farigab/bragdoc/internal/middleware"
 	"github.com/farigab/bragdoc/internal/usecase"
+	"github.com/farigab/bragdoc/internal/validation"
 )
 
 // RegisterReportRoutes registers report endpoints.
@@ -19,7 +21,7 @@ func RegisterReportRoutes(r chi.Router, reportSvc *usecase.ReportService) {
 	r.Post("/api/reports/ai-summary/custom", func(w http.ResponseWriter, req *http.Request) {
 		userLogin, ok := middleware.UserLoginFromContext(req.Context())
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			httpresp.JSONError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 
@@ -33,16 +35,21 @@ func RegisterReportRoutes(r chi.Router, reportSvc *usecase.ReportService) {
 			Repositories []string `json:"repositories"`
 		}
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
-			http.Error(w, "invalid body", http.StatusBadRequest)
+			httpresp.JSONError(w, http.StatusBadRequest, "invalid body")
 			return
 		}
 
-		var sdt, edt time.Time
-		if body.StartDate != "" {
-			sdt, _ = time.Parse("2006-01-02", body.StartDate)
+		// Validate dates and repositories
+		sdt, edt, err := validation.ValidateDateRange(body.StartDate, body.EndDate)
+		if err != nil {
+			logger.Debugw("invalid date range", "err", err, "start", body.StartDate, "end", body.EndDate)
+			httpresp.JSONError(w, http.StatusBadRequest, err.Error())
+			return
 		}
-		if body.EndDate != "" {
-			edt, _ = time.Parse("2006-01-02", body.EndDate)
+		if err := validation.ValidateRepositories(body.Repositories); err != nil {
+			logger.Debugw("invalid repositories", "err", err)
+			httpresp.JSONError(w, http.StatusBadRequest, err.Error())
+			return
 		}
 
 		out, err := reportSvc.Generate(usecase.GenerateReportInput{
@@ -55,12 +62,12 @@ func RegisterReportRoutes(r chi.Router, reportSvc *usecase.ReportService) {
 			Repositories: body.Repositories,
 		})
 		if err != nil {
-			log.Printf("report generation error: %v", err)
+			logger.Errorw("report generation error", "err", err)
 			if strings.Contains(err.Error(), "user not found") {
-				http.Error(w, "user not found", http.StatusNotFound)
+				httpresp.JSONError(w, http.StatusNotFound, "user not found")
 				return
 			}
-			http.Error(w, "ai generation failed", http.StatusInternalServerError)
+			httpresp.JSONError(w, http.StatusInternalServerError, "ai generation failed")
 			return
 		}
 
