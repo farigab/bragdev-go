@@ -1,6 +1,6 @@
-# Bragdoc
+# Bragdev
 
-> Bragdoc is a lightweight Go backend service that uses GitHub OAuth to fetch
+> BragDev is a lightweight Go backend service that uses GitHub OAuth to fetch
 > user data and generate human-readable reports using a generative model
 > (Gemini). It exposes a JSON HTTP API, persists users and refresh tokens in
 > PostgreSQL, and uses JWT + rotating refresh tokens stored in HttpOnly cookies
@@ -41,7 +41,7 @@
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/farigab/bragdoc.git
+git clone https://github.com/farigab/bragdev-go.git
 cd bragdoc
 ```
 
