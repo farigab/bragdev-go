@@ -178,7 +178,7 @@ func (h *authHandler) handleClearGitHubToken(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if _, err := h.userRepo.Save(&domain.User{Login: login, GitHubAccessToken: ""}); err != nil {
+	if err := h.userRepo.ClearGitHubToken(login); err != nil {
 		http.Error(w, "failed to clear token", http.StatusInternalServerError)
 		return
 	}
@@ -223,8 +223,8 @@ func (h *authHandler) upsertUserFromOAuth(accessToken string) (*domain.User, err
 	}
 
 	user := domain.NewUser(login, name, avatar)
-	user.GitHubAccessToken = accessToken
-
+	// Do not persist the GitHub access token when users authenticate via OAuth.
+	// Users can explicitly store a token later via the dedicated endpoint.
 	saved, err := h.userRepo.Save(user)
 	if err != nil {
 		logger.Errorw("error saving user", "err", err)
