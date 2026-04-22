@@ -17,13 +17,16 @@ const (
 	authPrefix            = "token "
 	formatCommitsStatus   = "github commits status=%d: %s"
 	formatListReposStatus = "github list repos status=%d: %s"
+	formatPullsStatus     = "github pulls status=%d: %s"
 	commitsPageFmt        = "%s/repos/%s/commits?per_page=%d&page=%d"
+	pullsPageFmt          = "%s/repos/%s/pulls?per_page=%d&page=%d&state=all"
 	userReposFmt          = "%s/user/repos?per_page=%d&page=%d"
 )
 
 // CommitFetcher retrieves commit messages from a VCS repository.
 type CommitFetcher interface {
 	ListCommitMessages(ownerRepo, author string, since, until time.Time) ([]CommitInfo, error)
+	ListPullRequests(ownerRepo, author string, since, until time.Time) ([]PullRequestInfo, error)
 }
 
 // CommitFetcherFactory creates a CommitFetcher authenticated with the given token.
@@ -430,6 +433,169 @@ func (g *GitHubClient) filterAndConvertCommits(ghCommits []ghCommit, author, myN
 		}
 	}
 	return out
+}
+
+type ghPull struct {
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
+	User   struct {
+		Login string `json:"login"`
+	} `json:"user"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	ClosedAt  string `json:"closed_at"`
+	MergedAt  string `json:"merged_at"`
+	State     string `json:"state"`
+	HTMLURL   string `json:"html_url"`
+}
+
+// PullRequestInfo represents a simplified pull request payload extracted from GitHub API.
+type PullRequestInfo struct {
+	Number      int       `json:"number"`
+	Title       string    `json:"title"`
+	Body        string    `json:"body,omitempty"`
+	AuthorLogin string    `json:"authorLogin,omitempty"`
+	CreatedAt   time.Time `json:"createdAt,omitempty"`
+	UpdatedAt   time.Time `json:"updatedAt,omitempty"`
+	ClosedAt    time.Time `json:"closedAt,omitempty"`
+	MergedAt    time.Time `json:"mergedAt,omitempty"`
+	State       string    `json:"state,omitempty"`
+	URL         string    `json:"url,omitempty"`
+}
+
+func ghPullToPRInfo(p ghPull) PullRequestInfo {
+	var created, updated, closed, merged time.Time
+	if t := strings.TrimSpace(p.CreatedAt); t != "" {
+		created, _ = time.Parse(time.RFC3339, t)
+	}
+	if t := strings.TrimSpace(p.UpdatedAt); t != "" {
+		updated, _ = time.Parse(time.RFC3339, t)
+	}
+	if t := strings.TrimSpace(p.ClosedAt); t != "" {
+		closed, _ = time.Parse(time.RFC3339, t)
+	}
+	if t := strings.TrimSpace(p.MergedAt); t != "" {
+		merged, _ = time.Parse(time.RFC3339, t)
+	}
+	return PullRequestInfo{
+		Number:      p.Number,
+		Title:       strings.TrimSpace(p.Title),
+		Body:        strings.TrimSpace(p.Body),
+		AuthorLogin: p.User.Login,
+		CreatedAt:   created,
+		UpdatedAt:   updated,
+		ClosedAt:    closed,
+		MergedAt:    merged,
+		State:       p.State,
+		URL:         p.HTMLURL,
+	}
+}
+
+func (g *GitHubClient) fetchPullsPage(u string) ([]ghPull, int, error) {
+	req, err := g.newRequest("GET", u, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer closeBody(resp.Body)
+
+	if resp.StatusCode == 404 {
+		return nil, 404, nil
+	}
+	if resp.StatusCode != 200 {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, resp.StatusCode, fmt.Errorf(formatPullsStatus, resp.StatusCode, string(b))
+	}
+
+	var ghPulls []ghPull
+	if err := json.NewDecoder(resp.Body).Decode(&ghPulls); err != nil {
+		return nil, resp.StatusCode, err
+	}
+	return ghPulls, resp.StatusCode, nil
+}
+
+func isBetween(t, since, until time.Time) bool {
+	if since.IsZero() && until.IsZero() {
+		return true
+	}
+	if !since.IsZero() && t.Before(since) {
+		return false
+	}
+	if !until.IsZero() && t.After(until) {
+		return false
+	}
+	return true
+}
+
+// fetchAllPulls paginates through the pulls API and returns all results.
+// If the repository is not found (404) it returns (nil, nil) to preserve
+// the previous behaviour where callers treat 404 as "no data".
+func (g *GitHubClient) fetchAllPulls(ownerRepo string, perPage int) ([]ghPull, error) {
+	var all []ghPull
+	for page := 1; ; page++ {
+		u := fmt.Sprintf(pullsPageFmt, g.baseURL, ownerRepo, perPage, page)
+		ghPulls, status, err := g.fetchPullsPage(u)
+		if err != nil {
+			return nil, err
+		}
+		if status == 404 {
+			return nil, nil
+		}
+		if len(ghPulls) == 0 {
+			break
+		}
+		all = append(all, ghPulls...)
+		if len(ghPulls) < perPage {
+			break
+		}
+	}
+	return all, nil
+}
+
+// prMatchesFilters applies author and date-range filters to a PullRequestInfo
+// and returns true when the PR should be included.
+func prMatchesFilters(pr PullRequestInfo, author string, since, until time.Time) bool {
+	if author != "" && !strings.EqualFold(pr.AuthorLogin, author) {
+		return false
+	}
+	if since.IsZero() && until.IsZero() {
+		return true
+	}
+	if !pr.CreatedAt.IsZero() && isBetween(pr.CreatedAt, since, until) {
+		return true
+	}
+	if !pr.MergedAt.IsZero() && isBetween(pr.MergedAt, since, until) {
+		return true
+	}
+	return false
+}
+
+// ListPullRequests returns pull requests for the given repository. If author
+// is provided, results will be filtered client-side. Date range filters are
+// applied to created_at and merged_at (inclusive).
+func (g *GitHubClient) ListPullRequests(ownerRepo, author string, since, until time.Time) ([]PullRequestInfo, error) {
+	perPage := 100
+	ghPulls, err := g.fetchAllPulls(ownerRepo, perPage)
+	if err != nil {
+		return nil, err
+	}
+	if ghPulls == nil {
+		return nil, nil
+	}
+
+	out := make([]PullRequestInfo, 0, len(ghPulls))
+	for _, p := range ghPulls {
+		pr := ghPullToPRInfo(p)
+		if !prMatchesFilters(pr, author, since, until) {
+			continue
+		}
+		out = append(out, pr)
+	}
+	return out, nil
 }
 
 // ListCommitMessages returns commits (sha, message, author, date) for the

@@ -83,13 +83,18 @@ func (s *ReportService) collectCommitData(in GenerateReportInput) ([]any, error)
 	filtered := make([]any, 0, len(repos))
 
 	for _, repo := range repos {
-		commits, err := fetcher.ListCommitMessages(repo, in.UserLogin, in.StartDate, in.EndDate)
-		if err != nil || len(commits) == 0 {
+		commits, cerr := fetcher.ListCommitMessages(repo, in.UserLogin, in.StartDate, in.EndDate)
+		prs, perr := fetcher.ListPullRequests(repo, in.UserLogin, in.StartDate, in.EndDate)
+
+		// If both calls failed or both returned no data, skip this repo.
+		if (cerr != nil && perr != nil) || (len(commits) == 0 && len(prs) == 0) {
 			continue // partial failure: skip repo, caller sees available data
 		}
+
 		filtered = append(filtered, map[string]any{
-			"repo":    repo,
-			"commits": commits,
+			"repo":         repo,
+			"commits":      commits,
+			"pullRequests": prs,
 		})
 	}
 
