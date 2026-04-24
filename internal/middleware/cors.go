@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
-
+	"slices"
 	"github.com/farigab/bragdev-go/internal/config"
 )
 
@@ -44,29 +44,32 @@ func buildAllowedOrigins(cfg *config.Config) []string {
 // parseOrigins splits a comma-separated list of URLs and normalises each entry
 // to scheme://host. Blank entries are ignored; unparseable entries are kept as-is.
 func parseOrigins(raw string) []string {
-	var out []string
+	out := make([]string, 0)
+	seen := make(map[string]struct{})
+
 	for _, p := range strings.Split(raw, ",") {
 		p = strings.TrimSpace(p)
 		if p == "" {
 			continue
 		}
+
 		if u, err := url.Parse(p); err == nil && u.Scheme != "" && u.Host != "" {
-			out = append(out, u.Scheme+"://"+u.Host)
-		} else {
-			out = append(out, p)
+			p = u.Scheme + "://" + u.Host
 		}
+
+		if _, ok := seen[p]; ok {
+			continue
+		}
+
+		seen[p] = struct{}{}
+		out = append(out, p)
 	}
 	return out
 }
 
 // isOriginAllowed reports whether origin appears in the allowed list.
 func isOriginAllowed(origin string, allowedOrigins []string) bool {
-	for _, ao := range allowedOrigins {
-		if ao == origin {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowedOrigins, origin)
 }
 
 // setOriginHeaders writes Access-Control-Allow-Origin (and related headers)
