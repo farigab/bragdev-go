@@ -21,9 +21,9 @@ func RegisterUserRoutes(r chi.Router, userRepo repository.UserRepository) {
 			return
 		}
 
-		u, err := userRepo.FindByLogin(userLogin)
+		u, err := userRepo.FindByLogin(req.Context(), userLogin)
 		if err != nil {
-			logger.Errorw("user not found", "err", err)
+			logger.Errorw("user not found", "login", userLogin, "err", err)
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}

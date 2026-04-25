@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/farigab/bragdev-go/internal/logger"
 	"github.com/farigab/bragdev-go/internal/middleware"
 	"github.com/farigab/bragdev-go/internal/repository"
+	"github.com/farigab/bragdev-go/internal/validation"
 )
 
 // RegisterGitHubRoutes registers GitHub-related endpoints.
@@ -30,7 +30,7 @@ func listRepositoriesHandler(userRepo repository.UserRepository) http.HandlerFun
 			return
 		}
 
-		u, err := userRepo.FindByLogin(userLogin)
+		u, err := userRepo.FindByLogin(req.Context(), userLogin)
 		if err != nil {
 			http.Error(w, "user not found", http.StatusNotFound)
 			return
@@ -60,7 +60,7 @@ func importRepositoriesHandler(userRepo repository.UserRepository) http.HandlerF
 			return
 		}
 
-		u, err := userRepo.FindByLogin(userLogin)
+		u, err := userRepo.FindByLogin(req.Context(), userLogin)
 		if err != nil {
 			http.Error(w, "user not found", http.StatusNotFound)
 			return
@@ -74,7 +74,7 @@ func importRepositoriesHandler(userRepo repository.UserRepository) http.HandlerF
 		resp, status, err := doImportRepositories(req.Body, u.GitHubAccessToken, userLogin)
 		if err != nil {
 			if status == http.StatusBadRequest {
-				http.Error(w, "invalid body", http.StatusBadRequest)
+				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			logger.Errorw("import repos error", "err", err)
@@ -87,14 +87,6 @@ func importRepositoriesHandler(userRepo repository.UserRepository) http.HandlerF
 	}
 }
 
-func parseDate(s string) time.Time {
-	if s == "" {
-		return time.Time{}
-	}
-	t, _ := time.Parse("2006-01-02", s)
-	return t
-}
-
 func doImportRepositories(body io.Reader, accessToken, userLogin string) (map[string]any, int, error) {
 	var payload struct {
 		Repositories []string `json:"repositories"`
@@ -102,6 +94,13 @@ func doImportRepositories(body io.Reader, accessToken, userLogin string) (map[st
 		DataFim      string   `json:"dataFim"`
 	}
 	if err := json.NewDecoder(body).Decode(&payload); err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+
+	// Use the shared validation package — previously parseDate silently swallowed
+	// parse errors returning time.Time{} as if no date was provided.
+	since, until, err := validation.ValidateDateRange(payload.DataInicio, payload.DataFim)
+	if err != nil {
 		return nil, http.StatusBadRequest, err
 	}
 
@@ -116,9 +115,6 @@ func doImportRepositories(body io.Reader, accessToken, userLogin string) (map[st
 		}
 	}
 
-	since := parseDate(payload.DataInicio)
-	until := parseDate(payload.DataFim)
-
 	details := map[string]int{}
 	total := 0
 	for _, repoFull := range repos {
@@ -131,10 +127,9 @@ func doImportRepositories(body io.Reader, accessToken, userLogin string) (map[st
 		total += c
 	}
 
-	resp := map[string]any{
+	return map[string]any{
 		"repositories": repos,
 		"totalCommits": total,
 		"details":      details,
-	}
-	return resp, http.StatusOK, nil
+	}, http.StatusOK, nil
 }

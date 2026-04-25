@@ -3,11 +3,12 @@ package config
 
 import (
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
 
-// Config armazena variáveis de ambiente usadas pela aplicação.
+// Config stores environment variables used by the application.
 type Config struct {
 	SQLiteCloudURL      string
 	JwtSecret           string
@@ -22,41 +23,19 @@ type Config struct {
 	CookieSecure        bool
 	CookieSameSite      string
 	LogLevel            string
+	Migrate             bool // run SQL migrations on startup when true
 }
 
-// Load carrega variáveis de ambiente (.env opcional) e retorna a configuração.
+// Load reads environment variables (.env optional) and returns the config.
 func Load() *Config {
-	_ = godotenv.Load() // .env is optional; ignore load errors
+	_ = godotenv.Load()
 
-	gitHubRedirect := os.Getenv("GITHUB_OAUTH_REDIRECT_URI")
-	if gitHubRedirect == "" {
-		gitHubRedirect = "http://localhost:8080/api/auth/callback"
-	}
-
-	frontendRedirect := os.Getenv("OAUTH_FRONTEND_REDIRECT")
-	if frontendRedirect == "" {
-		frontendRedirect = "http://localhost:4200"
-	}
-
-	cookieDomain := os.Getenv("APP_COOKIE_DOMAIN")
-	if cookieDomain == "" {
-		cookieDomain = "localhost"
-	}
-
-	cookieSameSite := os.Getenv("APP_COOKIE_SAME_SITE")
-	if cookieSameSite == "" {
-		cookieSameSite = "Lax"
-	}
-
-	geminiURL := os.Getenv("GEMINI_API_URL")
-	if geminiURL == "" {
-		geminiURL = "https://generativelanguage.googleapis.com/v1"
-	}
-
-	geminiModel := os.Getenv("GEMINI_MODEL")
-	if geminiModel == "" {
-		geminiModel = "gemini-2.5-flash"
-	}
+	gitHubRedirect := defaultString(os.Getenv("GITHUB_OAUTH_REDIRECT_URI"), "http://localhost:8080/api/auth/callback")
+	frontendRedirect := defaultString(os.Getenv("OAUTH_FRONTEND_REDIRECT"), "http://localhost:4200")
+	cookieDomain := defaultString(os.Getenv("APP_COOKIE_DOMAIN"), "localhost")
+	cookieSameSite := defaultString(os.Getenv("APP_COOKIE_SAME_SITE"), "Lax")
+	geminiURL := defaultString(os.Getenv("GEMINI_API_URL"), "https://generativelanguage.googleapis.com/v1")
+	geminiModel := defaultString(os.Getenv("GEMINI_MODEL"), "gemini-2.5-flash")
 
 	return &Config{
 		SQLiteCloudURL:      os.Getenv("DB_URL"),
@@ -72,6 +51,7 @@ func Load() *Config {
 		CookieSecure:        os.Getenv("APP_COOKIE_SECURE") == "true",
 		CookieSameSite:      cookieSameSite,
 		LogLevel:            defaultString(os.Getenv("LOG_LEVEL"), "info"),
+		Migrate:             strings.ToLower(os.Getenv("MIGRATE")) == "true",
 	}
 }
 

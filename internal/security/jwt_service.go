@@ -3,23 +3,16 @@ package security
 
 import (
 	"errors"
-	"os"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-
-	"github.com/farigab/bragdev-go/internal/logger"
 )
 
 // TokenService defines the JWT operations required by the application.
 type TokenService interface {
-	// GenerateToken creates a signed token for the specified user login and extra claims.
 	GenerateToken(userLogin string, extraClaims map[string]interface{}) (string, error)
-	// ExtractUserLogin returns the login stored in the token or an error.
 	ExtractUserLogin(tokenStr string) (string, error)
-	// IsValid returns true if the token is valid and signature checks out.
 	IsValid(tokenStr string) bool
-	// IsExpired returns true if the token is expired or invalid.
 	IsExpired(tokenStr string) bool
 }
 
@@ -30,15 +23,16 @@ type JWTService struct {
 }
 
 // NewJWTService creates a JWTService configured with the given secret and expiration.
-func NewJWTService(secret string, accessTokenExpirationSeconds int64) *JWTService {
+// Returns an error when secret is empty so the caller (main) can handle it explicitly
+// without the hidden os.Exit that prevented unit testing.
+func NewJWTService(secret string, accessTokenExpirationSeconds int64) (*JWTService, error) {
 	if secret == "" {
-		logger.Errorf("JWT_SECRET environment variable must be set")
-		os.Exit(1)
+		return nil, errors.New("JWT_SECRET must not be empty")
 	}
 	return &JWTService{
 		secret:                []byte(secret),
 		accessTokenExpiration: time.Duration(accessTokenExpirationSeconds) * time.Second,
-	}
+	}, nil
 }
 
 // GenerateToken builds and signs a JWT for the provided user login.
@@ -56,7 +50,9 @@ func (s *JWTService) GenerateToken(userLogin string, extraClaims map[string]inte
 	return token.SignedString(s.secret)
 }
 
-// parseToken attempts to parse the token and returns claims if present.
+// parseToken parses the token string and returns claims if present.
+// When the token parsed but validation failed (e.g. expired), both claims
+// and a non-nil error may be returned — callers check accordingly.
 func (s *JWTService) parseToken(tokenStr string) (jwt.MapClaims, error) {
 	token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -66,7 +62,6 @@ func (s *JWTService) parseToken(tokenStr string) (jwt.MapClaims, error) {
 	})
 
 	if err != nil {
-		// If token parsed but validation failed (e.g., expired), token may be non-nil
 		if token != nil {
 			if claims, ok := token.Claims.(jwt.MapClaims); ok {
 				return claims, err
@@ -111,12 +106,11 @@ func (s *JWTService) IsExpired(tokenStr string) bool {
 	return true
 }
 
-// ExtractUserLoginSafe attempts to parse the token and returns the login claim
-// when present even if the token failed validation (e.g., expired token).
+// ExtractUserLoginSafe returns the login claim even when the token failed
+// validation (e.g. expired). Used in logout-like paths where we need the
+// identity but do not require a valid signature.
 func (s *JWTService) ExtractUserLoginSafe(tokenStr string) (string, error) {
 	claims, err := s.parseToken(tokenStr)
-	// If parsing returned claims despite an error (for example an expired token),
-	// prefer returning the `login` claim when present instead of failing outright.
 	if claims == nil {
 		return "", err
 	}

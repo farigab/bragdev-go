@@ -2,12 +2,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -25,12 +28,10 @@ import (
 
 func main() {
 	cfg := config.Load()
-
-	// Initialize logger early so startup messages are visible and consistent
 	logger.Init(cfg.LogLevel)
 
 	if cfg.SQLiteCloudURL == "" {
-		logger.Errorf("SQLITECLOUD_URL environment variable must be set")
+		logger.Errorf("DB_URL environment variable must be set")
 		os.Exit(1)
 	}
 
@@ -47,77 +48,125 @@ func main() {
 
 	logger.Infow("connected to SQLite Cloud")
 
-	// Optionally run migrations if MIGRATE=true
-	if strings.ToLower(os.Getenv("MIGRATE")) == "true" {
+	if cfg.Migrate {
 		if err := runMigrations(db, "db/migrations"); err != nil {
 			logger.Errorf("migrations failed: %v", err)
 			os.Exit(1)
 		}
 	}
 
+	// NewJWTService now returns an error instead of calling os.Exit internally,
+	// so test code can construct a JWTService without process termination.
+	jwtSvc, err := security.NewJWTService(cfg.JwtSecret, 900)
+	if err != nil {
+		logger.Errorf("jwt service: %v", err)
+		os.Exit(1)
+	}
+
 	r := chi.NewRouter()
-
-	// CORS middleware
 	r.Use(appMiddleware.CORSMiddleware(cfg))
-
-	// Request logging + panic recovery
 	r.Use(appMiddleware.RequestLogger)
 
-	// health
 	r.Get("/api/health", handlers.HealthHandler)
 
-	// wiring
 	userRepo := repository.NewUserRepo(db)
 	refreshRepo := repository.NewRefreshTokenRepo(db)
 
-	jwtSvc := security.NewJWTService(cfg.JwtSecret, 900) // 15 minutes
 	oauthSvc := integration.NewGitHubOAuthService(cfg.GitHubClientID, cfg.GitHubClientSecret)
 	geminiClient := integration.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiAPIURL, cfg.GeminiModel)
 	fetcherFactory := integration.GitHubClientFactory{}
 	reportSvc := usecase.NewReportService(userRepo, fetcherFactory, geminiClient)
 
-	// Public auth routes (OAuth flow + token refresh)
+	// Public auth routes (OAuth flow + refresh)
 	handlers.RegisterAuthRoutes(r, cfg, oauthSvc, jwtSvc, userRepo, refreshRepo)
 
-	// Protected routes — require a valid JWT cookie
+	// Protected routes — require a valid JWT or valid refreshToken
 	r.Group(func(r chi.Router) {
 		r.Use(appMiddleware.AuthWithRefresh(cfg, jwtSvc, userRepo, refreshRepo))
 		handlers.RegisterUserRoutes(r, userRepo)
 		handlers.RegisterGitHubRoutes(r, userRepo)
 		handlers.RegisterReportRoutes(r, reportSvc)
+		// GitHub token routes were previously registered as public with manual
+		// cookie validation — they now live in the protected group and rely on
+		// the AuthWithRefresh context like every other protected handler.
+		handlers.RegisterTokenRoutes(r, userRepo)
 	})
 
-	// Background job: cleanup expired refresh tokens every hour
-	go func() {
-		ticker := time.NewTicker(1 * time.Hour)
-		defer ticker.Stop()
-		for range ticker.C {
-			if err := refreshRepo.DeleteExpiredTokens(); err != nil {
-				logger.Errorw("failed cleaning expired refresh tokens", "err", err)
-			}
-		}
-	}()
+	// Background cleanup: stop cleanly when the server shuts down.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go runTokenCleanup(ctx, refreshRepo)
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	logger.Infow("starting server", "port", port)
+	port := portFromEnv()
 	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		logger.Errorf("failed to bind port: %v", err)
 		os.Exit(1)
 	}
 
+	srv := &http.Server{Handler: r}
 	logger.Infow("server started", "port", port)
-	if err := http.Serve(ln, r); err != nil {
+
+	// Graceful shutdown on SIGTERM / SIGINT (critical for containerised deploys).
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+		<-sigCh
+		logger.Infow("shutdown signal received")
+		cancel() // stop background goroutines
+		shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer shutCancel()
+		if err := srv.Shutdown(shutCtx); err != nil {
+			logger.Errorf("graceful shutdown error: %v", err)
+		}
+	}()
+
+	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		logger.Errorf("server error: %v", err)
 		os.Exit(1)
 	}
+	logger.Infow("server stopped")
 }
 
+// runTokenCleanup deletes expired refresh tokens every hour until ctx is cancelled.
+func runTokenCleanup(ctx context.Context, repo repository.RefreshTokenRepository) {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if err := repo.DeleteExpiredTokens(ctx); err != nil {
+				logger.Errorw("failed cleaning expired refresh tokens", "err", err)
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// Port method removed — use portFromEnv() local helper instead.
+
+func portFromEnv() string {
+	if p := os.Getenv("PORT"); p != "" {
+		return p
+	}
+	return "8080"
+}
+
+// ─── Migrations ──────────────────────────────────────────────────────────────
+
+// runMigrations applies pending .sql files from dir in lexicographic order.
+// It creates a schema_migrations tracking table on first run so each file is
+// only applied once — without tracking, idempotent CREATE IF NOT EXISTS worked
+// by accident but any future ALTER/INSERT migration would run multiple times.
 func runMigrations(db *sqlitecloud.SQCloud, dir string) error {
+	if err := db.Execute(`CREATE TABLE IF NOT EXISTS schema_migrations (
+		filename   TEXT PRIMARY KEY,
+		applied_at TEXT NOT NULL
+	);`); err != nil {
+		return fmt.Errorf("create schema_migrations table: %w", err)
+	}
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("read migrations dir: %w", err)
@@ -132,21 +181,50 @@ func runMigrations(db *sqlitecloud.SQCloud, dir string) error {
 	sort.Strings(names)
 
 	for _, n := range names {
+		applied, err := isMigrationApplied(db, n)
+		if err != nil {
+			return fmt.Errorf("check migration %s: %w", n, err)
+		}
+		if applied {
+			logger.Infow("skipping migration (already applied)", "migration", n)
+			continue
+		}
+
 		if err := applyMigration(db, dir, n); err != nil {
 			return err
+		}
+
+		if err := markMigrationApplied(db, n); err != nil {
+			return fmt.Errorf("mark migration %s: %w", n, err)
 		}
 		logger.Infow("applied migration", "migration", n)
 	}
 	return nil
 }
 
-// applyMigration reads and executes all statements in a single .sql file.
+func isMigrationApplied(db *sqlitecloud.SQCloud, filename string) (bool, error) {
+	q := fmt.Sprintf("SELECT 1 FROM schema_migrations WHERE filename='%s';", sqlEscapeMain(filename))
+	result, err := db.Select(q)
+	if err != nil {
+		return false, err
+	}
+	return result != nil && result.GetNumberOfRows() > 0, nil
+}
+
+func markMigrationApplied(db *sqlitecloud.SQCloud, filename string) error {
+	q := fmt.Sprintf(
+		"INSERT INTO schema_migrations (filename, applied_at) VALUES ('%s', '%s');",
+		sqlEscapeMain(filename),
+		time.Now().UTC().Format("2006-01-02 15:04:05"),
+	)
+	return db.Execute(q)
+}
+
 func applyMigration(db *sqlitecloud.SQCloud, dir, name string) error {
 	b, err := os.ReadFile(dir + "/" + name)
 	if err != nil {
 		return fmt.Errorf("read migration %s: %w", name, err)
 	}
-
 	for _, stmt := range splitStatements(string(b)) {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" {
@@ -159,36 +237,67 @@ func applyMigration(db *sqlitecloud.SQCloud, dir, name string) error {
 	return nil
 }
 
-// splitStatements splits a SQL script into individual statements by semicolon,
-// ignoring semicolons that appear inside single-quoted strings.
+// sqlEscapeMain is a local copy of sqlEscape used only for migration filenames.
+// Filenames come from ReadDir and are not user-supplied, but we keep it safe.
+func sqlEscapeMain(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
+}
+
+// splitStatements splits a SQL script on semicolons, correctly handling
+// single-quoted strings, -- line comments, and /* */ block comments.
 func splitStatements(sql string) []string {
 	var stmts []string
 	var cur strings.Builder
 	inQuote := false
+	i := 0
 
-	for i := 0; i < len(sql); i++ {
+	for i < len(sql) {
 		ch := sql[i]
+
 		switch {
+		// -- line comment: skip to end of line
+		case !inQuote && ch == '-' && i+1 < len(sql) && sql[i+1] == '-':
+			for i < len(sql) && sql[i] != '\n' {
+				i++
+			}
+			continue
+
+		// /* block comment: skip to */
+		case !inQuote && ch == '/' && i+1 < len(sql) && sql[i+1] == '*':
+			i += 2
+			for i+1 < len(sql) && !(sql[i] == '*' && sql[i+1] == '/') {
+				i++
+			}
+			i += 2 // consume */
+			continue
+
+		// Opening single quote
 		case ch == '\'' && !inQuote:
 			inQuote = true
 			cur.WriteByte(ch)
+
+		// Escaped single quote '' inside a quoted string
+		case ch == '\'' && inQuote && i+1 < len(sql) && sql[i+1] == '\'':
+			cur.WriteByte(ch)
+			i++
+			cur.WriteByte(ch)
+
+		// Closing single quote
 		case ch == '\'' && inQuote:
-			// Handle escaped single quote ('')
-			if i+1 < len(sql) && sql[i+1] == '\'' {
-				cur.WriteByte(ch)
-				i++
-				cur.WriteByte(ch)
-			} else {
-				inQuote = false
-				cur.WriteByte(ch)
-			}
+			inQuote = false
+			cur.WriteByte(ch)
+
+		// Statement separator outside a string
 		case ch == ';' && !inQuote:
 			stmts = append(stmts, cur.String())
 			cur.Reset()
+
 		default:
 			cur.WriteByte(ch)
 		}
+		i++
 	}
+
 	if s := strings.TrimSpace(cur.String()); s != "" {
 		stmts = append(stmts, s)
 	}

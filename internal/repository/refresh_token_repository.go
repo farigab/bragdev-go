@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -11,12 +12,12 @@ import (
 
 // RefreshTokenRepository defines operations for refresh tokens.
 type RefreshTokenRepository interface {
-	Save(t *domain.RefreshToken) (*domain.RefreshToken, error)
-	FindByToken(token string) (*domain.RefreshToken, error)
-	FindByUserLogin(userLogin string) ([]*domain.RefreshToken, error)
-	Delete(t *domain.RefreshToken) error
-	DeleteAllByUserLogin(userLogin string) error
-	DeleteExpiredTokens() error
+	Save(ctx context.Context, t *domain.RefreshToken) (*domain.RefreshToken, error)
+	FindByToken(ctx context.Context, token string) (*domain.RefreshToken, error)
+	FindByUserLogin(ctx context.Context, userLogin string) ([]*domain.RefreshToken, error)
+	Delete(ctx context.Context, t *domain.RefreshToken) error
+	DeleteAllByUserLogin(ctx context.Context, userLogin string) error
+	DeleteExpiredTokens(ctx context.Context) error
 }
 
 // SQLiteCloudRefreshTokenRepo implements RefreshTokenRepository using SQLite Cloud.
@@ -25,18 +26,20 @@ type SQLiteCloudRefreshTokenRepo struct {
 }
 
 // NewRefreshTokenRepo creates a new SQLiteCloudRefreshTokenRepo.
-// The name NewPostgresRefreshTokenRepo is kept as an alias for backward compatibility.
 func NewRefreshTokenRepo(db *sqlitecloud.SQCloud) *SQLiteCloudRefreshTokenRepo {
 	return &SQLiteCloudRefreshTokenRepo{db: db}
 }
 
-// NewPostgresRefreshTokenRepo is an alias for NewRefreshTokenRepo kept for compatibility.
+// NewPostgresRefreshTokenRepo is an alias kept for backward compatibility.
 func NewPostgresRefreshTokenRepo(db *sqlitecloud.SQCloud) *SQLiteCloudRefreshTokenRepo {
 	return NewRefreshTokenRepo(db)
 }
 
-// timeLayout is used for storing and parsing time values in SQLite (TEXT columns).
-const timeLayout = time.RFC3339
+// sqliteTimeLayout stores timestamps in the format SQLite's datetime() understands
+// so that lexicographic and datetime() comparisons both work correctly.
+// RFC3339 uses 'T' and 'Z' which are NOT recognized by SQLite's datetime() function,
+// causing silent failures in date comparisons (e.g. DeleteExpiredTokens).
+const sqliteTimeLayout = "2006-01-02 15:04:05"
 
 // scanRefreshToken reads a RefreshToken from result at the given row index.
 // Column order: token(0), user_login(1), expires_at(2), created_at(3), revoked(4).
@@ -47,8 +50,8 @@ func scanRefreshToken(result *sqlitecloud.Result, row uint64) (*domain.RefreshTo
 	createdAtStr, _ := result.GetStringValue(row, 3)
 	revokedInt, _ := result.GetInt64Value(row, 4)
 
-	expiresAt, _ := time.Parse(timeLayout, expiresAtStr)
-	createdAt, _ := time.Parse(timeLayout, createdAtStr)
+	expiresAt, _ := time.ParseInLocation(sqliteTimeLayout, expiresAtStr, time.UTC)
+	createdAt, _ := time.ParseInLocation(sqliteTimeLayout, createdAtStr, time.UTC)
 
 	return &domain.RefreshToken{
 		Token:     token,
@@ -59,7 +62,6 @@ func scanRefreshToken(result *sqlitecloud.Result, row uint64) (*domain.RefreshTo
 	}, nil
 }
 
-// boolToInt converts a Go bool to SQLite INTEGER (0 or 1).
 func boolToInt(b bool) int {
 	if b {
 		return 1
@@ -67,8 +69,11 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// Save inserts or updates a refresh token record and returns the persisted entity.
-func (r *SQLiteCloudRefreshTokenRepo) Save(t *domain.RefreshToken) (*domain.RefreshToken, error) {
+// Save inserts or updates a refresh token and returns the persisted entity.
+func (r *SQLiteCloudRefreshTokenRepo) Save(ctx context.Context, t *domain.RefreshToken) (*domain.RefreshToken, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if t == nil {
 		return nil, nil
 	}
@@ -82,23 +87,25 @@ ON CONFLICT(token) DO UPDATE SET
 RETURNING token, user_login, expires_at, created_at, revoked;`,
 		sqlEscape(t.Token),
 		sqlEscape(t.UserLogin),
-		t.ExpiresAt.UTC().Format(timeLayout),
-		t.CreatedAt.UTC().Format(timeLayout),
+		t.ExpiresAt.UTC().Format(sqliteTimeLayout),
+		t.CreatedAt.UTC().Format(sqliteTimeLayout),
 		boolToInt(t.Revoked),
 	)
 	result, err := r.db.Select(q)
 	if err != nil {
 		return nil, err
 	}
-	// Fallback: RETURNING may not be available in all SQLite Cloud configurations.
 	if result == nil || result.GetNumberOfRows() == 0 {
-		return r.FindByToken(t.Token)
+		return r.FindByToken(ctx, t.Token)
 	}
 	return scanRefreshToken(result, 0)
 }
 
-// FindByToken retrieves a refresh token by its string value.
-func (r *SQLiteCloudRefreshTokenRepo) FindByToken(token string) (*domain.RefreshToken, error) {
+// FindByToken retrieves a refresh token by its value.
+func (r *SQLiteCloudRefreshTokenRepo) FindByToken(ctx context.Context, token string) (*domain.RefreshToken, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	q := fmt.Sprintf(
 		"SELECT token, user_login, expires_at, created_at, revoked FROM refresh_tokens WHERE token='%s';",
 		sqlEscape(token),
@@ -114,7 +121,10 @@ func (r *SQLiteCloudRefreshTokenRepo) FindByToken(token string) (*domain.Refresh
 }
 
 // FindByUserLogin returns all refresh tokens for a given user login.
-func (r *SQLiteCloudRefreshTokenRepo) FindByUserLogin(userLogin string) ([]*domain.RefreshToken, error) {
+func (r *SQLiteCloudRefreshTokenRepo) FindByUserLogin(ctx context.Context, userLogin string) ([]*domain.RefreshToken, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	q := fmt.Sprintf(
 		"SELECT token, user_login, expires_at, created_at, revoked FROM refresh_tokens WHERE user_login='%s';",
 		sqlEscape(userLogin),
@@ -138,7 +148,10 @@ func (r *SQLiteCloudRefreshTokenRepo) FindByUserLogin(userLogin string) ([]*doma
 }
 
 // Delete removes the provided refresh token record.
-func (r *SQLiteCloudRefreshTokenRepo) Delete(t *domain.RefreshToken) error {
+func (r *SQLiteCloudRefreshTokenRepo) Delete(ctx context.Context, t *domain.RefreshToken) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if t == nil {
 		return nil
 	}
@@ -150,7 +163,10 @@ func (r *SQLiteCloudRefreshTokenRepo) Delete(t *domain.RefreshToken) error {
 }
 
 // DeleteAllByUserLogin removes all refresh tokens for the given user.
-func (r *SQLiteCloudRefreshTokenRepo) DeleteAllByUserLogin(userLogin string) error {
+func (r *SQLiteCloudRefreshTokenRepo) DeleteAllByUserLogin(ctx context.Context, userLogin string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	q := fmt.Sprintf(
 		"DELETE FROM refresh_tokens WHERE user_login='%s';",
 		sqlEscape(userLogin),
@@ -159,7 +175,12 @@ func (r *SQLiteCloudRefreshTokenRepo) DeleteAllByUserLogin(userLogin string) err
 }
 
 // DeleteExpiredTokens removes tokens past their expiration time.
-// Uses SQLite's datetime('now') instead of PostgreSQL's NOW().
-func (r *SQLiteCloudRefreshTokenRepo) DeleteExpiredTokens() error {
+// Timestamps are stored as "2006-01-02 15:04:05" (UTC) so SQLite's
+// datetime() comparisons work correctly — RFC3339's 'T'/'Z' are not
+// recognized by SQLite and would cause silent comparison failures.
+func (r *SQLiteCloudRefreshTokenRepo) DeleteExpiredTokens(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return r.db.Execute("DELETE FROM refresh_tokens WHERE expires_at < datetime('now');")
 }

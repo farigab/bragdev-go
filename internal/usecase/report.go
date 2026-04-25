@@ -2,6 +2,7 @@
 package usecase
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -23,8 +24,7 @@ type GenerateReportInput struct {
 	Repositories []string
 }
 
-// ReportService encapsulates report generation business logic, keeping it
-// decoupled from HTTP transport concerns.
+// ReportService encapsulates report generation business logic.
 type ReportService struct {
 	userRepo       repository.UserRepository
 	fetcherFactory integration.CommitFetcherFactory
@@ -46,8 +46,8 @@ func NewReportService(
 
 // Generate collects GitHub commit data, builds an AI prompt, and returns the
 // generated report text.
-func (s *ReportService) Generate(in GenerateReportInput) (string, error) {
-	filtered, err := s.collectCommitData(in)
+func (s *ReportService) Generate(ctx context.Context, in GenerateReportInput) (string, error) {
+	filtered, err := s.collectCommitData(ctx, in)
 	if err != nil {
 		return "", err
 	}
@@ -65,16 +65,15 @@ func (s *ReportService) Generate(in GenerateReportInput) (string, error) {
 	return s.ai.GenerateReport(prompt)
 }
 
-// collectCommitData fetches commits for every non-empty repository. Repos that
-// error or return no commits are silently skipped so the caller always gets the
-// best available data. Returns an empty slice when no repositories are provided.
-func (s *ReportService) collectCommitData(in GenerateReportInput) ([]any, error) {
+// collectCommitData fetches commits for every non-empty repository.
+// Repos that error or return no data are silently skipped.
+func (s *ReportService) collectCommitData(ctx context.Context, in GenerateReportInput) ([]any, error) {
 	repos := nonEmptyRepos(in.Repositories)
 	if len(repos) == 0 {
 		return []any{}, nil
 	}
 
-	u, err := s.userRepo.FindByLogin(in.UserLogin)
+	u, err := s.userRepo.FindByLogin(ctx, in.UserLogin)
 	if err != nil {
 		return nil, fmt.Errorf("user not found: %w", err)
 	}
@@ -86,9 +85,8 @@ func (s *ReportService) collectCommitData(in GenerateReportInput) ([]any, error)
 		commits, cerr := fetcher.ListCommitMessages(repo, in.UserLogin, in.StartDate, in.EndDate)
 		prs, perr := fetcher.ListPullRequests(repo, in.UserLogin, in.StartDate, in.EndDate)
 
-		// If both calls failed or both returned no data, skip this repo.
 		if (cerr != nil && perr != nil) || (len(commits) == 0 && len(prs) == 0) {
-			continue // partial failure: skip repo, caller sees available data
+			continue
 		}
 
 		filtered = append(filtered, map[string]any{
@@ -101,7 +99,6 @@ func (s *ReportService) collectCommitData(in GenerateReportInput) ([]any, error)
 	return filtered, nil
 }
 
-// nonEmptyRepos returns only the non-blank entries from the input slice.
 func nonEmptyRepos(repos []string) []string {
 	result := make([]string, 0, len(repos))
 	for _, r := range repos {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 // OAuthService defines required operations to exchange code and fetch profile.
@@ -15,17 +16,22 @@ type OAuthService interface {
 	GetUserProfile(accessToken string) (map[string]interface{}, error)
 }
 
-// GitHubOAuthService is a minimal implementation that uses HTTP to call GitHub.
-// Note: production code should handle retries, errors and use a typed struct for profile.
+// GitHubOAuthService is a minimal implementation that calls the GitHub OAuth API.
 type GitHubOAuthService struct {
 	client       *http.Client
 	clientID     string
 	clientSecret string
 }
 
-// NewGitHubOAuthService creates a new GitHubOAuthService using the provided client credentials.
+// NewGitHubOAuthService creates a new GitHubOAuthService.
+// Uses an explicit 15-second timeout — http.DefaultClient has no timeout
+// and would block goroutines indefinitely if GitHub is unresponsive.
 func NewGitHubOAuthService(clientID, clientSecret string) *GitHubOAuthService {
-	return &GitHubOAuthService{client: http.DefaultClient, clientID: clientID, clientSecret: clientSecret}
+	return &GitHubOAuthService{
+		client:       &http.Client{Timeout: 15 * time.Second},
+		clientID:     clientID,
+		clientSecret: clientSecret,
+	}
 }
 
 // ExchangeCodeForToken exchanges an OAuth code for an access token.
@@ -71,7 +77,7 @@ func (s *GitHubOAuthService) ExchangeCodeForToken(code string, redirectURI strin
 		}
 	}
 
-	// fallback parse as form-encoded
+	// Fallback: GitHub may return form-encoded on some error paths.
 	vals, err := url.ParseQuery(string(respBody))
 	if err == nil {
 		if at := vals.Get("access_token"); at != "" {
@@ -84,13 +90,18 @@ func (s *GitHubOAuthService) ExchangeCodeForToken(code string, redirectURI strin
 
 // GetUserProfile retrieves the GitHub profile for the given access token.
 func (s *GitHubOAuthService) GetUserProfile(accessToken string) (map[string]interface{}, error) {
-	req, _ := http.NewRequest("GET", "https://api.github.com/user", nil)
+	req, err := http.NewRequest("GET", "https://api.github.com/user", nil)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
+
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer closeBody(resp.Body)
+
 	if resp.StatusCode/100 != 2 {
 		return nil, errors.New("non-2xx from github user api")
 	}
