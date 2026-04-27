@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/farigab/bragdev-go/internal/httpresp"
 	"github.com/farigab/bragdev-go/internal/integration"
 	"github.com/farigab/bragdev-go/internal/logger"
 	"github.com/farigab/bragdev-go/internal/middleware"
@@ -41,10 +43,10 @@ func listRepositoriesHandler(userRepo repository.UserRepository) http.HandlerFun
 		}
 
 		client := integration.NewGitHubClient(u.GitHubAccessToken)
-		repos, err := client.ListRepositories()
+		repos, err := client.ListRepositories(req.Context())
 		if err != nil {
 			logger.Errorw("list repos error", "err", err)
-			http.Error(w, "failed to list repositories", http.StatusInternalServerError)
+			httpresp.JSONError(w, http.StatusBadGateway, "Failed to list repositories")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -62,7 +64,7 @@ func importRepositoriesHandler(userRepo repository.UserRepository) http.HandlerF
 
 		u, err := userRepo.FindByLogin(req.Context(), userLogin)
 		if err != nil {
-			http.Error(w, "user not found", http.StatusNotFound)
+			httpresp.JSONError(w, http.StatusNotFound, "user not found")
 			return
 		}
 		if strings.TrimSpace(u.GitHubAccessToken) == "" {
@@ -71,7 +73,7 @@ func importRepositoriesHandler(userRepo repository.UserRepository) http.HandlerF
 		}
 
 		req.Body = http.MaxBytesReader(w, req.Body, maxBodyBytes)
-		resp, status, err := doImportRepositories(req.Body, u.GitHubAccessToken, userLogin)
+		resp, status, err := doImportRepositories(req.Context(), req.Body, u.GitHubAccessToken, userLogin)
 		if err != nil {
 			if status == http.StatusBadRequest {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -87,7 +89,7 @@ func importRepositoriesHandler(userRepo repository.UserRepository) http.HandlerF
 	}
 }
 
-func doImportRepositories(body io.Reader, accessToken, userLogin string) (map[string]any, int, error) {
+func doImportRepositories(ctx context.Context, body io.Reader, accessToken, userLogin string) (map[string]any, int, error) {
 	var payload struct {
 		Repositories []string `json:"repositories"`
 		DataInicio   string   `json:"dataInicio"`
@@ -108,7 +110,7 @@ func doImportRepositories(body io.Reader, accessToken, userLogin string) (map[st
 	repos := payload.Repositories
 	if len(repos) == 0 {
 		var err error
-		repos, err = client.ListRepositories()
+		repos, err = client.ListRepositories(ctx)
 		if err != nil {
 			logger.Errorw("list repos error", "err", err)
 			return nil, http.StatusInternalServerError, err
@@ -118,7 +120,7 @@ func doImportRepositories(body io.Reader, accessToken, userLogin string) (map[st
 	details := map[string]int{}
 	total := 0
 	for _, repoFull := range repos {
-		c, err := client.CountCommits(repoFull, userLogin, since, until)
+		c, err := client.CountCommits(ctx, repoFull, userLogin, since, until)
 		if err != nil {
 			logger.Errorw("count commits error", "repo", repoFull, "err", err)
 			continue

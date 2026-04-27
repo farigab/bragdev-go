@@ -47,6 +47,9 @@ func NewPostgresUserRepo(db *sqlitecloud.SQCloud) *SQLiteCloudUserRepo {
 // this time. This escaping is therefore the safest available option. All login
 // values are additionally validated against loginPattern before reaching SQL.
 func sqlEscape(s string) string {
+	if strings.ContainsRune(s, 0) {
+		panic("null byte in SQL value")
+	}
 	return strings.ReplaceAll(s, "'", "''")
 }
 

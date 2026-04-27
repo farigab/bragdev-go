@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +13,7 @@ import (
 
 // AIReportGenerator generates AI reports from text prompts.
 type AIReportGenerator interface {
-	GenerateReport(prompt string) (string, error)
+	GenerateReport(ctx context.Context, prompt string) (string, error)
 }
 
 // GenerationConfig holds tunable parameters for the Gemini generation API.
@@ -64,7 +65,7 @@ func (g *GeminiClient) WithGenerationConfig(cfg GenerationConfig) *GeminiClient 
 }
 
 // GenerateReport sends a prompt and extracts text from multiple response shapes.
-func (g *GeminiClient) GenerateReport(prompt string) (string, error) {
+func (g *GeminiClient) GenerateReport(ctx context.Context, prompt string) (string, error) {
 	if g.apiKey == "" {
 		return "", errors.New("gemini api key not configured")
 	}
@@ -87,7 +88,12 @@ func (g *GeminiClient) GenerateReport(prompt string) (string, error) {
 		return "", err
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewReader(jb))
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		url,
+		bytes.NewReader(jb),
+	)
 	if err != nil {
 		return "", err
 	}

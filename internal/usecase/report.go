@@ -62,7 +62,7 @@ func (s *ReportService) Generate(ctx context.Context, in GenerateReportInput) (s
 		prompt = in.UserPrompt + "\n\n" + prompt
 	}
 
-	return s.ai.GenerateReport(prompt)
+	return s.ai.GenerateReport(ctx, prompt)
 }
 
 // collectCommitData fetches commits for every non-empty repository.
@@ -82,8 +82,8 @@ func (s *ReportService) collectCommitData(ctx context.Context, in GenerateReport
 	filtered := make([]any, 0, len(repos))
 
 	for _, repo := range repos {
-		commits, cerr := fetcher.ListCommitMessages(repo, in.UserLogin, in.StartDate, in.EndDate)
-		prs, perr := fetcher.ListPullRequests(repo, in.UserLogin, in.StartDate, in.EndDate)
+		commits, cerr := fetcher.ListCommitMessages(ctx, repo, in.UserLogin, in.StartDate, in.EndDate)
+		prs, perr := fetcher.ListPullRequests(ctx, repo, in.UserLogin, in.StartDate, in.EndDate)
 
 		if (cerr != nil && perr != nil) || (len(commits) == 0 && len(prs) == 0) {
 			continue
